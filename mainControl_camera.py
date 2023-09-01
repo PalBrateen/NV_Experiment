@@ -13,13 +13,13 @@ import sys, time, dialog, cv2, os
 print("\x10 \x1b[0mImports Successful...")
 plt.rcParams.update({'figure.max_open_warning': 0})     # No warnings on opening mult fig windows
 global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, SG, expCfg
-expCfgFile = 't1ms0'+'_config'
+expCfgFile = 'esr'+'_config'
 N_total = [1e3, 1e3]        # a 2-element list (sig and ref) for total number of repetitions.. if empty then N_total is allowed to change for each scanpt..
 trial_run = 'n'
 seq_no_plot = [0]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
-plotPulseSequence = True
+plotPulseSequence = False
 # t_exposure = 0.1     # in seconds.. eta dorkar o nei.. user will define it..
 livePlotUpdate = False
 
@@ -118,14 +118,14 @@ def initialize_exp(instr, expCfg):
     savePath = cwd[0:cwd.rfind('\\')]+ "\\Saved_Data\\" + time.strftime("%Y-%m-%d", time.localtime()) + '\\'         # Path to folder where data will be saved
     
     if not (isdir(savePath)):
-        makedirs(savePath)
+        os.makedirs(savePath)
     print("\x10 Save folder: \x1b[38;2;100;250;30m" + time.strftime("%Y-%m-%d", time.localtime()) + '\x1b[0m')
 
     # adjust the exposure time and select ROI for experiment
     camctrl.live_view(cam)      # see image live and adjust the exposure time
     # now select the ROI
-    roi = camctrl.select_roi(cam)
-    # roi = [1212,1328,60,76]
+    roi = camctrl.select_roi(cam, roi=[936, 764, 608, 768])
+    
     # cam["exposure_time"] = 0.05
 
     return [roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList]

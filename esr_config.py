@@ -23,7 +23,7 @@ SRSdisplay = 'disp2'
 # Pulse sequence parameters:----------------------------------------------------
 t_AOM = 20 *us          # Duration of one-half of signal-aquisition half
 t_tot = 2*t_AOM
-Nsamples = 2500             # Number of FL samples to take at each frequency point
+Nsamples = 1             # Number of FL samples to take at each frequency point
 Nruns = 1                    # Number of averaging runs to do
 contrast_mode = 'ratio_signal_over_reference'       # Contrast mode
 

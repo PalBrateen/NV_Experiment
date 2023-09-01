@@ -164,16 +164,17 @@ def live_view(cam):
             break
     cv2.destroyAllWindows()
 
-def select_roi(cam):
+def select_roi(cam,roi=[]):
     """Select an ROI"""
     set_roi(cam,status=False)       # first turn OFF the subarray mode or go to full resolution (2048x2048)
     frame = get_frames(cam, n_frames=1);
     shape = frame.shape
-    # now open a window and select the ROI
-    cv2.namedWindow("Select ROI", cv2.WINDOW_NORMAL|cv2.WINDOW_KEEPRATIO)
-    cv2.resizeWindow("Select ROI", int(shape[1]/4), int(shape[0]/4))
-    roi = cv2.selectROI("Select ROI", frame)
-    cv2.destroyAllWindows()
+    if roi==[]:
+        # now open a window and select the ROI
+        cv2.namedWindow("Select ROI", cv2.WINDOW_NORMAL|cv2.WINDOW_KEEPRATIO)
+        cv2.resizeWindow("Select ROI", int(shape[1]/4), int(shape[0]/4))
+        roi = cv2.selectROI("Select ROI", frame)
+        cv2.destroyAllWindows()
     # nicher code ta ekta live view er moto.. eta oi live er function e dewa achhe.. tai comment kore dilam...
     # while True:
     #     frame = get_frames(cam,n_frames=1);

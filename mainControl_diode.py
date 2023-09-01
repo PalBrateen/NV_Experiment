@@ -13,7 +13,7 @@ plt.rcParams.update({'figure.max_open_warning': 0})     # No warnings on opening
 
 global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, SG, expCfg
 expCfgFile = 'MW_timing'+'_config'
-trial_run = 'y'
+trial_run = 'n'
 seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
