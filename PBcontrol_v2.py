@@ -91,7 +91,7 @@ def PB_program_camera(sequence, sequenceArgs, err_check=False):
     List = []
     allPBchannels = seqctrl.make_sequence('cam',sequence, sequenceArgs)       # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
     # print(allPBchannels)
-    for i in range(0,2):    # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
+    for i in range(0,len(allPBchannels)):    # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
         channelBitMasks = seqctrl.sequence_event_cataloguer(allPBchannels[i])
         List.append(create_PBinstruction(channelBitMasks, err_check))
     # print(List)

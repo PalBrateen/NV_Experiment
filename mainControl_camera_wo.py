@@ -1,20 +1,11 @@
 #%% Initialization and Definition
 # reset
 
-import Camcontrol as camctrl
-import PBctrl_under_construc as PBctrl
-import seqCtrl_under_construc as seqctrl
-import SGcontrol as SGctrl
-import connectionConfig as conCfg
+import Camcontrol as camctrl; import PBcontrol_v2 as PBctrl; import sequencecontrol as seqctrl; import SGcontrol as SGctrl; import connectionConfig as conCfg
 from spinapi import ns, us, ms, Inst
-import matplotlib.pyplot as plt
-import numpy as np
-from os.path import isdir, isfile
-from os import makedirs
-from importlib import import_module
-import sys, time, dialog
-import cv2
-%matplotlib qt
+import matplotlib.pyplot as plt; import numpy as np; from os.path import isdir, isfile; from importlib import import_module
+import sys, time, dialog, cv2, os
+# %matplotlib qt
 
 # from matlab import engine as eng
 
@@ -32,13 +23,14 @@ exposure_time = 0.1     # in seconds
 livePlotUpdate = False
 
 def initialize_instr(sequence):
+    # if trial_run not in ['n']:
     try:
-        print('\x10 PulseBlaster board: \x1b[38;2;250;250;0mv'+PBctrl.pb_get_version()+'\x1b[0m')   # Display the PB board version using pb_get_version()
+        PBctrl.configurePB()
+        print('\x10 PB: \x1b[38;2;250;250;0mv'+PBctrl.pb_get_version()+'\x1b[0m')   # Display the PB board version using pb_get_version()
     except:
         print("Error Initializing PB !!")
     # finally:
     #     sys.exit()
-    
     if trial_run in ['n','N'] and sequence not in ['aom_timing', 'T1ms0', 'rodelay']:       # Do not initialize SG if it is a trial run or the sequence is present in the list ['aom_timing', 'T1ms0', 'rodelay']
         SG = SGctrl.initSG(conCfg.serialaddr, conCfg.model_name)      # Initialize SG using RS-232 address and the model name
         print('\x10 Signal Generator: \x1b[38;2;250;250;0m' + SG.query('*idn?') + '\x1b[0m')    # Query instrument
@@ -60,7 +52,7 @@ def initialize_instr(sequence):
         print("\x10 Trial run... \x1b[38;2;250;250;0mNo SG")
         return [None, None]
     
-def initialize_exp(expCfg):
+def initialize_exp(instr, expCfg):
     # Initialize the experimental parameters and check whether the sequence can be sent to the PB...
     # Also, start the initial PB sequence
     # Return variables: 
@@ -80,11 +72,11 @@ def initialize_exp(expCfg):
     
     # ------------------------------------------------------------------
         # est_time = expCfg.t_tot * expCfg.Nsamples * expCfg.N_scanPts ??
-    # check the sequence for errors, if errors are found, remove those params
+    # check the scanned parameters for errors, if errors are found, remove those params
     if expCfg.sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:   # for sequences except ESR, set MW frequency
         seqArgList = [param[seq_no_plot[-1]]]
         seqArgList.extend(sequenceArgs)     # Make a dummy seqArgList just to create it
-        [n_error, param] = seqctrl.seq_err_check(expCfg.sequence, expCfg.PBchannels, seqArgList,  expCfg.scannedParam, expCfg.N_scanPts)
+        [n_error, param] = seqctrl.param_err_check(instr, expCfg.sequence, expCfg.PBchannels, seqArgList,  expCfg.scannedParam, expCfg.N_scanPts)
         if n_error>0:
             print('\x1b[1;37;41m'+'Err: Check Sequences...\x1b[0m')
             print('\x1b[38;2;250;0;0m'+str(n_error)+'\x1b[0m parameters removed...')
@@ -114,7 +106,7 @@ def initialize_exp(expCfg):
         
     # Start the initial sequence now ------------
     # if trial_run in ['n','N']:
-    instructionList = start_initial_PB_seq()
+    instructionList = [start_initial_PB_seq()]
     PBctrl.run_sequence_for_diode(instructionList)
     print("\x1b[38;2;50;250;50m----------PB Running----------\x1b[0m")
     print("Initial Sequence Started...")
@@ -126,7 +118,7 @@ def initialize_exp(expCfg):
     # Create the data save folder...
     savePath = expCfg.savePath + time.strftime("%Y-%m-%d", time.localtime()) + '\\'
     if not (isdir(savePath)):
-        makedirs(savePath)
+        os.makedirs(savePath)
     print("\x10 Save folder: \x1b[38;2;100;250;30m" + time.strftime("%Y-%m-%d", time.localtime()) + '\x1b[0m')
 
     # adjust the exposure time and select ROI for experiment
@@ -251,7 +243,7 @@ def view_sequence(sequence, PBchannels, seqArgList, only_plot=False, parameter=[
             if  sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
                 seqArgList[0] = parameter[seq_no_plot[i]]
         plt.figure(dpi = plot_dpi)
-        the_list = PBctrl.PB_program_camera(sequence,seqArgList)
+        the_list = PBctrl.PB_program(instr,sequence,seqArgList)
         for j in range(0, len(the_list)):
             instructionList = the_list[j][0]
             inst_times = the_list[j][4]
@@ -264,7 +256,7 @@ def view_sequence(sequence, PBchannels, seqArgList, only_plot=False, parameter=[
             plt.yticks(yTicks, PBchannels.keys())          # Include the names of the PB channels
             plt.xlabel('Time (us)')
             plt.ylabel('Channel')
-            plt.title(sequence + ' Pulse Seq plot. Param val @ '+str(seq_no_plot[i])+': ' + str(parameter[seq_no_plot[i]]) + 'ns\nTransitions at: '+str([vals for vals in inst_times.values()]), fontsize=12)
+            plt.title(sequence + ' Plot. Param @ '+str(seq_no_plot[i])+': ' + str(parameter[seq_no_plot[i]]) + 'ns\nTransitions at: '+str([vals for vals in inst_times.values()]), fontsize=10)
     # Way to display the total no of instructions in the plot, since it will vary with different scanPts:
         # print("Total %d inst" % len(inst_times.keys()))
 
@@ -277,7 +269,7 @@ def acquire_data(t_exposure, t_seq_total, roi, Nsamples, parameter, ith_scan_pt,
             SGctrl.set_SG_freq(SG, parameter[ith_scan_pt])
     else:
         seqArgList[0] = parameter[ith_scan_pt]
-    the_list = PBctrl.PB_program_camera(sequence,seqArgList)
+    the_list = PBctrl.PB_program(sequence,seqArgList)
     # print(the_list)
     for i in range(0, len(the_list)):
         instructionList.append(the_list[i][0])
@@ -336,7 +328,7 @@ def plot_data(i_max, param, data_raw, x_label, x_unit, roi, n_frames, live=False
 
 # if __name__ == '__main__':
     # instructionList = main()
-#%%
+
 expCfg = import_module(expCfgFile)
 # expCfg.N_scanPts = len(expCfg.scannedParam)
 clk_cyc = 1e3/conCfg.PBclk      # One clk cycle of PB = inverse of the clk freq of PB
@@ -345,8 +337,9 @@ print('\x10 \x1b[38;2;250;250;0mRunning '+expCfg.saveFileName+' sequence\x1b[0m'
 # cam["exposure_time"] = exposure_time
 seqctrl.check_params(expCfgFile)
 print("\x10 Parameter checks completed...")
+instr = 'cam'
 #-------------------------- 20062023-------------------------
-[roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList] = initialize_exp(expCfg)
+[roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList] = initialize_exp(instr,expCfg)
 roi = [int(element/4)*4 for element in roi];
 # width = roi[2]; height = roi[3];
 width = 8; height =12;

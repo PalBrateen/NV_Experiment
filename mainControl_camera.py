@@ -13,13 +13,13 @@ import sys, time, dialog, cv2, os
 print("\x10 \x1b[0mImports Successful...")
 plt.rcParams.update({'figure.max_open_warning': 0})     # No warnings on opening mult fig windows
 global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, SG, expCfg
-expCfgFile = 'esr'+'_config'
-N_total = [1e3, 1e3]        # a 2-element list (sig and ref) for total number of repetitions.. if empty then N_total is allowed to change for each scanpt..
-trial_run = 'n'
-seq_no_plot = [0]
+expCfgFile = 'rabi'+'_config'
+N_total = [1e5,1e5]        # a 2-element list (sig and ref) for total number of repetitions.. if empty then N_total is allowed to change for each scanpt..
+trial_run = 'y'
+seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
-plotPulseSequence = False
+plotPulseSequence = True
 # t_exposure = 0.1     # in seconds.. eta dorkar o nei.. user will define it..
 livePlotUpdate = False
 
