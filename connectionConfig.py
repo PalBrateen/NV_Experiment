@@ -22,8 +22,8 @@ PB_camera = 7
 # DAQ Connections-------------------------------------------------------
 input_terminals = ["P6363/ai15"]#, "P6363/ai7"]       # Differential connection
 # Detector connected to AI7 and PD to AI6
-samp_clk_terminal = "PFI14"     # Start sampling from the channels in the scan list
 conv_clk_terminal = "PFI9"     # ADC conversion pulses
+samp_clk_terminal = "PFI14"     # Start sampling from the channels in the scan list
 start_trig_terminal = "PFI15"   # Trigger the start of data acquisiton
 def cal_samp_rate():
     if len(input_terminals)==1:
@@ -37,7 +37,7 @@ min_voltage=-10  # Max/min voltage range of the photodiode signal
 max_voltage=10
 
 #SRS Connections-------------------------------------------------------
-serialaddr = 4
+serialaddr = 5
 model_name='SG384'
 
 #------------------------- END OF USER INPUT ----------------------------------#

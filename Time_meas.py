@@ -23,7 +23,7 @@ rate = 2e6      #concfg.cal_samp_rate() (enter value in Hz)
 print('Sampling Rate:', rate)
 # Nsamples = int( 2e6 )
 # est_time = Nsamples/rate *1e3    # in ms
-est_time = 10 *1e3   # in ms (enter value in seconds)
+est_time = 3600 *1e3   # in ms (enter value in seconds)
 Nsamples = int( est_time/1e3 * rate )
 
 # cts=[]
@@ -48,7 +48,7 @@ daq.close_daq_task(read_task)
 saving = dialog.yesno_box('File Saving', 'Save File?')
 if saving == 'yes':
     file_number = input('File name: Time_#: ')
-    filename = "D:\\Brateen\\Python_codes\\qdSpectro-active\\Saved_Data\\2023-08-18\\Time_"+file_number+".txt"
+    filename = "D:\\Brateen\\Python_codes\\qdSpectro-active\\Saved_Data\\2023-11-21\\Time_"+file_number+".txt"
     datafile = open(filename, 'a')
     datafile.write("%g\t%g\n%g\t%g\n" %(rate, Nsamples, est_time, act_time))
     data_write_format = "%0.3f\n"
