@@ -13,29 +13,29 @@ clk_cyc = 1e3/PBclk         #in ns; ONE CLOCK CYCLE
 #%% USER INPUT
 
 # Delay/Interval scan
-start_delay = 0.5 *us
-end_delay = 2000 *us
+start_delay = 50 *us
+end_delay = 300 *us
 step_size = 50 *us
 N_scanPts = round((end_delay - start_delay)/step_size + 1)
 # N_scanPts = 5
 
 # Pulse sequence parameters:----------------------------------------------------
-t_AOM = 10*us                    # AOM pulse duration (ns)
+t_AOM = 5*us                    # AOM pulse duration (ns)
 ro_delay = (2500)*ns      # Readout delay (ns)
 # ro_delay = 300*ns
-AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
-# AOM_lag = (800)*ns         # Time lag involved in the pulsing of the AOM
+# AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
+AOM_lag = (800)*ns         # Time lag involved in the pulsing of the AOM
 MW_lag = 150 *ns
 
 # start_delay = 1*us        # Time from which the pulse sequence starts
 
-Nsamples = 10000              # Number of FL samples to take at each scan point
+Nsamples = 1500              # Number of FL samples to take at each scan point
 Nruns = 1                    # Number of averaging runs to do
 # contrast_mode ='ratio_signal_over_reference'       # Contrast mode
 
 MW_power = 8                 # Microwave power output from SRS(dBm)
-MW_freq = 2835 /1e3 * GHz     # Microwave frequency (Hz)
-t_pi = 160 *ns
+MW_freq = 2870 /1e3 * GHz     # Microwave frequency (Hz)
+t_pi = 112 *ns
 
 # Plotting options--------------------------------------------------------------
 # livePlotUpdate = True       # Live plot update option

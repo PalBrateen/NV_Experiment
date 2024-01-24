@@ -37,7 +37,7 @@ ro_delay = (2500)*ns      # Readout delay (ns)
 AOM_lag = (800)*ns
 MW_lag = 150*ns
 
-Nsamples = 1    # Number of signal frames to take at each scanpt
+Nsamples = 10    # Number of signal frames to take at each scanpt
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------
@@ -67,6 +67,12 @@ randomize = int(True)
 
 #%%
 scannedParam = np.linspace(startPulseDuration, endPulseDuration, N_scanPts, endpoint=True)
+
+if 14.0 in scannedParam:
+    loc = np.where(scannedParam==14)
+    scannedParam = np.delete(scannedParam,loc[0][0])
+    N_scanPts = len(scannedParam)
+# print(14 in scannedParam)
 # scannedParam = scannedParam[0:2]
 # N_scanPts = len(scannedParam)
 # scannedParam2 = 

@@ -220,27 +220,26 @@ def run_sequence_for_camera(instructionList,t_exposure,t_seq_total,N_total):
     start = [0]                                    # (List) with one element; start[0]=0
     #-----------------------------korlam.. 15/07/2023-----------------------------
     t_cam_response = 38.96 *us
-    t_jitter = 0 *us
+    
     # below are two lists, with 2 elements each, one for signal and other for reference...
     # the operation should use np.floor() and not np.rint().. think..
     if N_total == []:
-        N_trigger = [int(np.floor((t_cam_response-t_jitter)/element)) for element in t_seq_total]
-        N_remaining = [int(np.floor((t_exposure - t_cam_response - t_jitter)/element)) for element in t_seq_total]
+        N_trigger = [int(np.floor(t_cam_response/element)) for element in t_seq_total]
+        N_remaining = [int(np.floor((t_exposure - t_cam_response)/element)) for element in t_seq_total]
         N_total = [int(np.floor(t_exposure/element)) for element in t_seq_total]
         # print(N_total)
         # need to check if (N_trigger + N_remaining) <= N_total) ??
 
         # defining the buffer times (in nanoseconds) -  time when there will be no sequence running - quiet period
-        
         t_buffer0 = (t_exposure - t_cam_response) - N_remaining[0]*t_seq_total[0]
         t_buffer1 = t_cam_response - N_trigger[0]*t_seq_total[0]
-        t_buffer2 = (t_exposure - t_cam_response) - N_remaining[1]*t_seq_total[1] 
+        t_buffer2 = (t_exposure - t_cam_response) - N_remaining[1]*t_seq_total[1]
         t_buffer3 = t_cam_response - N_trigger[1]*t_seq_total[1]
         t_buffer = [t_buffer0, t_buffer1, t_buffer2, t_buffer3]
         t_buffer = [clk_cyc*round(time/clk_cyc) if time>10*ns else 10.0*ns for time in t_buffer]
         
     else:
-        # change t_exposure keeping N_total constant
+        # change the t_exposure
         N_trigger = [int(np.floor(t_cam_response/element)) for element in t_seq_total]
         N_remaining = [int(N_total[i] - N_trigger[i]) for i in range(0,len(N_total))]
         t_exposure = [(t_cam_response+N_remaining[i]*t_seq_total[i]) for i in range(0,len(N_total))]    # this is in ns..
@@ -297,7 +296,7 @@ def run_sequence_for_camera(instructionList,t_exposure,t_seq_total,N_total):
     else:
         start[0] = pb_inst_pbonly(concfg.camera, Inst.CONTINUE, 0, t_cam_response); errorCatcher(start[0])
     #------------------------------------------------------------------------------------
-    # 2nd: sequence has 'no' camera, with the sequence (signal_instruction) running...
+    # 2nd: sequence has 'no' camera, with the sequence (instructionList[0]) running...
     started = False
     # the buffer time is at the beginning in this case...
     status = pb_inst_pbonly(0, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0]>=10 else 0
@@ -321,7 +320,7 @@ def run_sequence_for_camera(instructionList,t_exposure,t_seq_total,N_total):
     # print(signal_instruction[i+1][0], Inst.END_LOOP, start[1], signal_instruction[i+1][3])
     errorCatcher(status)
     #------------------------------------------------------------------------------------
-    # 3rd: sequence has 'camera' has again (XORed with concfg.camera)... with the signal sequence (signal_instruction) running...
+    # 3rd: sequence has 'camera' has again (XORed with concfg.camera)... with the signal sequence (instructionList[0]) running...
     if N_trigger[0] >= 1:
         started = False
         for i in range(0, len(signal_instruction)-1):

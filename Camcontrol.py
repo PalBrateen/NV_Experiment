@@ -78,13 +78,17 @@ class Ui_MainWindow(QtWidgets.QWidget):
             plt.pause(0.000001)
 
 def open_camera():
+    """Get access to camera"""
     # try:
-    global cam
-    ham.dcam.__enter__()
-    cam = ham.dcam[0]
-    cam.open()
+    global cam      # declaring cam variable as global for other functions to access
+    ham.dcam.__enter__()    # enter into class DCAM
+    cam = ham.dcam[0]       # dcam is the object of class DCAM. Select the 0th camera 
+    cam.open()              # open the selected camera
+    # Sometimes, cam.open() doesn't produce error when the camera is switched off. However, cam.capabilities is empty if the cam.open() does not work properly. Hence check cam.capabilities()...
     if not (cam.capabilities == {}):
         print("\x1b[38;2;100;250;30mCamera Initialized..!\x1b[0m")
+    # set the trigger source as internal in the beginning
+    cam["trigger_source"] = 1       # Internal(1), external(2), software(3), master_pulse(4)
     return cam
 
 def close_camera(cam):

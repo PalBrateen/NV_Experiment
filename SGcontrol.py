@@ -11,7 +11,7 @@ GHz = 1e9
 # unicode = lambda s: str(s)
 
 ##-------------------- Function definitions--------------------
-def initSG(serialaddr='3',modelName='SG384'):
+def initSG(serialaddr='5',modelName='SG384'):
     """
     Opens a RS-232 communication channel with the SG.
     It also clears the ESR and INSR registers as well as the LERR error buffer.

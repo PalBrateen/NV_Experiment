@@ -23,8 +23,8 @@ FIVE_PERIOD = 0xA00000           # 23/22/21/20 = 1010
 
 
 def make_esr_seq_camera(seq_dur):
-    delay = 0.5*us
-    # seq_dur = 2*seq_dur;
+    delay = 500*ns
+    seq_dur -= 500*ns;
     # readout_width = clk_cyc*round(100*ns/clk_cyc)
     laser_start_times = [delay, delay]; laser_pulse_durations = [seq_dur,seq_dur]
     laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
@@ -33,10 +33,10 @@ def make_esr_seq_camera(seq_dur):
     allPBchannels_ref = [laser_channel]
     # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
 
-    MW_start_times = [delay]; MW_pulse_durations = [seq_dur]
+    MW_start_times = [delay,delay]; MW_pulse_durations = [seq_dur,seq_dur]
     MWchannel = PBchannel(MW, [MW_start_times[0]], [MW_pulse_durations[0]])
     allPBchannels_sig.extend([MWchannel])
-    # MWchannel = PBchannel(MW, [MW_start_times[1]], [MW_pulse_durations[1]])
+    MWchannel = PBchannel(MW, [MW_start_times[1]], [MW_pulse_durations[1]])
     # allPBchannels_ref.extend([MWchannel])
     
     allPBchannels = [allPBchannels_sig, allPBchannels_ref]
@@ -94,66 +94,12 @@ def make_rabi_seq_camera_FL(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
     allPBchannels = [allPBchannels_sig, allPBchannels_ref]
     return allPBchannels
 
-def make_rabi_seq_camera_MW(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
-    """
-    Make pulse sequence for Rabi oscillations
-
-    Parameters
-    ----------
-    t_MW : float
-        Width of MW pulse.
-    t_AOM : float
-        AOM 'ON' time or AOM width.
-    t_ro_delay : float
-        Length of (AOM) readout pulse.
-    AOM_lag: float
-        
-    MW_lag: float
-        
-    Returns
-    -------
-    allPBchannels : list
-        A list of PBchannel object types.
-
-    """
-    if t_MW < 10:
-        t_drive = 10 +0*ns
-    else:
-        t_drive = t_MW + 0*ns
-    
-    laser_start_times = [t_drive, t_drive]; laser_pulse_durations = [t_AOM, t_AOM]
-    laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
-    allPBchannels_sig = [laser_channel];
-    laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
-    allPBchannels_ref = [laser_channel]
-    # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
-    
-    if t_MW <= 5*clk_cyc and t_MW > 0:
-        MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [5*clk_cyc for i in range(0,2)]
-        # SHORT PULSE duration
-        shortpulseFLAG = int((t_MW/2)*ONE_PERIOD)
-        shortPulseChannel = PBchannel(shortpulseFLAG, [MW_start_times[0]], [MW_pulse_durations[0]])
-        allPBchannels_sig.extend([shortPulseChannel])
-        shortPulseChannel = PBchannel(shortpulseFLAG, [MW_start_times[1]], [MW_pulse_durations[1]])
-        # allPBchannels_ref.extend([shortPulseChannel])
-    else:
-        MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [t_MW for i in range(0,2)]
-    MWchannel = PBchannel(MW, [MW_start_times[0]], [MW_pulse_durations[0]])
-    allPBchannels_sig.extend([MWchannel])
-    MWchannel = PBchannel(MW, [MW_start_times[1]], [MW_pulse_durations[1]])
-    # allPBchannels_ref.extend([MWchannel])
-    
-    allPBchannels = [allPBchannels_sig]#, allPBchannels_ref]
-    return allPBchannels
-
 def make_pulsed_esr_seq_camera_FL(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi):
     """
     Make pulse sequence for Rabi oscillations
 
     Parameters
     ----------
-    t_MW : float
-        Width of MW pulse.
     t_AOM : float
         AOM 'ON' time or AOM width.
     t_ro_delay : float
@@ -162,34 +108,24 @@ def make_pulsed_esr_seq_camera_FL(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi):
         
     MW_lag: float
         
+    t_pi : float
+        Width of MW pi pulse.
     Returns
     -------
     allPBchannels : list
         A list of PBchannel object types.
 
     """
-    if t_pi < 10:
-        t_drive = 10+0*ns
-    else:
-        t_drive = t_pi + 0*ns
+    t_flip = t_pi
     
-    laser_start_times = [t_drive, t_drive]; laser_pulse_durations = [t_AOM, t_AOM]
+    laser_start_times = [t_flip, t_flip]; laser_pulse_durations = [t_AOM, t_AOM]
     laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
     allPBchannels_sig = [laser_channel];
     laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
     allPBchannels_ref = [laser_channel]
     # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
     
-    if t_MW <= 5*clk_cyc and t_MW > 0:
-        MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [5*clk_cyc for i in range(0,2)]
-        # SHORT PULSE duration
-        shortpulseFLAG = int((t_MW/2)*ONE_PERIOD)
-        shortPulseChannel = PBchannel(shortpulseFLAG, [MW_start_times[0]], [MW_pulse_durations[0]])
-        allPBchannels_sig.extend([shortPulseChannel])
-        shortPulseChannel = PBchannel(shortpulseFLAG, [MW_start_times[1]], [MW_pulse_durations[1]])
-        # allPBchannels_ref.extend([shortPulseChannel])
-    else:
-        MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [t_MW for i in range(0,2)]
+    MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [t_flip for i in range(0,2)]
     MWchannel = PBchannel(MW, [MW_start_times[0]], [MW_pulse_durations[0]])
     allPBchannels_sig.extend([MWchannel])
     MWchannel = PBchannel(MW, [MW_start_times[1]], [MW_pulse_durations[1]])
@@ -200,20 +136,70 @@ def make_pulsed_esr_seq_camera_FL(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi):
 
 def make_t1_seq_camera(relax_time, dur_AOM, AOM_lag, rodelay, MW_lag, t_pi):
     # laser_start_times = [relax_time, 0]; laser_pulse_durations = [dur_AOM, relax_time + dur_AOM]
+    relax_time += t_pi
     laser_start_times = [relax_time, relax_time]; laser_pulse_durations = [dur_AOM, dur_AOM]
     laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
     allPBchannels_sig = [laser_channel]
     laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
     allPBchannels_ref = [laser_channel]
 
-    MW_start_times = [AOM_lag-MW_lag]; MW_durations = [t_pi]
+    MW_start_times = [AOM_lag-MW_lag, AOM_lag-MW_lag]; MW_durations = [t_pi, t_pi]
     MW_channel = PBchannel(MW, [MW_start_times[0]], [MW_durations[0]])
     allPBchannels_sig.extend([MW_channel])
-
-    # MW_start_times = [dur_AOM+relax_time+AOM_lag-MW_lag]; MW_durations = [t_pi]
-    # MW_channel = PBchannel(MW, [MW_start_times[0]], [MW_durations[0]])
-    # allPBchannels_ref.append([MW_channel])
+    MW_channel = PBchannel(MW, [MW_start_times[1]], [MW_durations[1]])
+    # allPBchannels_ref.extend([MW_channel])
 
     allPBchannels = [allPBchannels_sig, allPBchannels_ref]
     return allPBchannels
 
+# def make_rabi_seq_camera_MW(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
+#     """
+#     Make pulse sequence for Rabi oscillations
+
+#     Parameters
+#     ----------
+#     t_MW : float
+#         Width of MW pulse.
+#     t_AOM : float
+#         AOM 'ON' time or AOM width.
+#     t_ro_delay : float
+#         Length of (AOM) readout pulse.
+#     AOM_lag: float
+        
+#     MW_lag: float
+        
+#     Returns
+#     -------
+#     allPBchannels : list
+#         A list of PBchannel object types.
+
+#     """
+#     if t_MW < 10:
+#         t_drive = 10 +0*ns
+#     else:
+#         t_drive = t_MW + 0*ns
+    
+#     laser_start_times = [t_drive, t_drive]; laser_pulse_durations = [t_AOM, t_AOM]
+#     laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
+#     allPBchannels_sig = [laser_channel];
+#     laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
+#     allPBchannels_ref = [laser_channel]
+#     # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
+    
+#     if t_MW <= 5*clk_cyc and t_MW > 0:
+#         MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [5*clk_cyc for i in range(0,2)]
+#         # SHORT PULSE duration
+#         shortpulseFLAG = int((t_MW/2)*ONE_PERIOD)
+#         shortPulseChannel = PBchannel(shortpulseFLAG, [MW_start_times[0]], [MW_pulse_durations[0]])
+#         allPBchannels_sig.extend([shortPulseChannel])
+#         shortPulseChannel = PBchannel(shortpulseFLAG, [MW_start_times[1]], [MW_pulse_durations[1]])
+#         # allPBchannels_ref.extend([shortPulseChannel])
+#     else:
+#         MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [t_MW for i in range(0,2)]
+#     MWchannel = PBchannel(MW, [MW_start_times[0]], [MW_pulse_durations[0]])
+#     allPBchannels_sig.extend([MWchannel])
+#     MWchannel = PBchannel(MW, [MW_start_times[1]], [MW_pulse_durations[1]])
+#     # allPBchannels_ref.extend([MWchannel])
+    
+#     allPBchannels = [allPBchannels_sig]#, allPBchannels_ref]
+#     return allPBchannels

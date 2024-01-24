@@ -28,15 +28,16 @@ step_size = 1 * MHz
 N_scanPts = round((endfreq - startfreq)/step_size + 1)
 # N_scanPts = 1501              # Number of pulse length steps
 MW_power = 8          # Microwave power output from SRS(dBm)
-t_duration = 150 *ns         # Duration of pi-pulse
+t_duration = 112 *ns         # Duration of pi-pulse
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 80 * us                    # AOM pulse duration (ns)
-ro_delay = 2500 * ns      # Readout delay (ns)
-AOM_lag = (1450) * ns
-MW_lag = 150 * ns
-t_tot = 2*(t_AOM + t_duration)
-Nsamples = 2500                  # Number of FL ssamples to take at each pulse length poin
+t_AOM = 5*us                    # AOM pulse duration (ns)
+ro_delay = (2500)*ns      # Readout delay (ns)
+# AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
+AOM_lag = (800)*ns
+MW_lag = 150*ns
+
+Nsamples = 5    # Number of signal frames to take at each scanpt
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------

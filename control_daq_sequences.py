@@ -26,7 +26,7 @@ def make_esr_seq(seq_dur):
     laser_channel = PBchannel(laser, [0], [seq_dur])
     MW_channel = PBchannel(MW, [0], [seq_dur/2]) # seq_dur/2
     # conv_clk_channel = PBchannel(conv_clk, [pd_pulse[0]-conv_clk_sep, pd_pulse[0], pd_pulse[1]-conv_clk_sep, pd_pulse[1]], [trig_width for i in range(0,4)])    
-    samp_clk_channel = PBchannel(samp_clk, [pulse for pulse in pd_pulse], [trig_width for i in range(0,len(pd_pulse))]) #-conv_clk_sep-pulse_width
+    samp_clk_channel = PBchannel(samp_clk, [(pulse-200*ns) for pulse in pd_pulse], [trig_width for i in range(0,len(pd_pulse))]) #-conv_clk_sep-pulse_width
     start_trig_channel = PBchannel(start_trig, [0], [trig_width])
     
     allPBchannels = [laser_channel, samp_clk_channel, MW_channel, start_trig_channel]

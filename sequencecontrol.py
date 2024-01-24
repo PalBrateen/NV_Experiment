@@ -423,7 +423,7 @@ def param_err_check(instr, sequence, PBchannels, seqArgList, parameter=[0,1], Ns
 
 def make_sequence(instr, sequence, args):
     if instr == 'cam':
-        var = {'esr_seq':cam_seq.make_esr_seq_camera,   'rabi_seq':cam_seq.make_rabi_seq_camera_MW,
+        var = {'esr_seq':cam_seq.make_esr_seq_camera,   'rabi_seq':cam_seq.make_rabi_seq_camera_FL,
                'pesr_seq': cam_seq.make_pulsed_esr_seq_camera_FL,  'T1ms0': cam_seq.make_t1_seq_camera}
     
     elif instr == 'diode':

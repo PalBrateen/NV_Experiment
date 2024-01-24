@@ -12,18 +12,18 @@ clk_cyc = 1e3/PBclk #in ns
 #%% USER INPUT
 
 # Microwave scan parameters:----------------------------------------------------
-startFreq = 28.0 /10 * GHz          # Start frequency (in Hz)
-endFreq = 29.4 /10 * GHz             # End frequency (in Hz)
-step_size = 1*MHz
+startFreq = 28.2 /10 * GHz          # Start frequency (in Hz)
+endFreq = 29.2 /10 * GHz             # End frequency (in Hz)
+step_size = 1 *MHz
 N_scanPts = round((endFreq - startFreq)/step_size + 1)             # Number of frequency steps
 # N_scanPts = 5
-MW_power = 8         # Microwave power output from SRS(dBm)
+MW_power = 0         # Microwave power output from SRS(dBm)
 SRSdisplay = 'disp2'
 
 # Pulse sequence parameters:----------------------------------------------------
 t_AOM = 20 *us          # Duration of one-half of signal-aquisition half
 t_tot = 2*t_AOM
-Nsamples = 1             # Number of FL samples to take at each frequency point
+Nsamples = 2500*4             # Number of FL samples to take at each frequency point
 Nruns = 1                    # Number of averaging runs to do
 contrast_mode = 'ratio_signal_over_reference'       # Contrast mode
 
