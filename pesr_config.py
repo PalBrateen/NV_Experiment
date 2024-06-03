@@ -22,22 +22,22 @@ clk_cyc = 1e3/PBclk # Time resolution in ns
 # See that all the experimental parameters are Python mutable object types
 
 #%% Microwave scan parameters:----------------------------------------------------
-startfreq = 28.0 /10 * GHz      # Start pulse duration (in nanoseconds)
-endfreq = 29.4 /10 * GHz      # End pulse duration (in nanoseconds)
+startfreq = 28.2 /10 * GHz      # Start pulse duration (in nanoseconds)
+endfreq = 29.2 /10 * GHz      # End pulse duration (in nanoseconds)
 step_size = 1 * MHz
 N_scanPts = round((endfreq - startfreq)/step_size + 1)
 # N_scanPts = 1501              # Number of pulse length steps
-MW_power = 8          # Microwave power output from SRS(dBm)
-t_duration = 112 *ns         # Duration of pi-pulse
+MW_power = 10          # Microwave power output from SRS(dBm)
+t_duration = 110 *ns         # Duration of pi-pulse
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 5*us                    # AOM pulse duration (ns)
-ro_delay = (2500)*ns      # Readout delay (ns)
+t_AOM = 2.5*us                    # AOM pulse duration (ns)
+ro_delay = (500)*ns      # Readout delay (ns)
 # AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
-AOM_lag = (800)*ns
+AOM_lag = (800)*ns      # for camera
 MW_lag = 150*ns
 
-Nsamples = 5    # Number of signal frames to take at each scanpt
+Nsamples = 10    # Number of signal frames to take at each scanpt
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------

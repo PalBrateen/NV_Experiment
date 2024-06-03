@@ -2,13 +2,13 @@
 #%% Imports
 from connectionConfig import laser, samp_clk, start_trig, conv_clk, I, Q, MW, PBclk, camera
 from spinapi import ns, us, ms
-import PBcontrol as PBctrl
+import PBcontrol_v2 as PBctrl
 import sys
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 from importlib import import_module
-import control_camera_sequences as cam_seq; import control_daq_sequences as daq_seq
+import control_camera_sequences as cam_seq, control_daq_sequences as daq_seq
 # from importlib import import_module
 
 # expCfgFile = 'esr_config'
@@ -43,7 +43,7 @@ def check_params(config_file):
     # if len(expCfg.scannedParam) > 1:
     step_size = expCfg.scannedParam[1] - expCfg.scannedParam[0]
     if expCfg.sequence not in ['aom_timing', 'rodelay']:      # Check MW power if the seqeunce is not 'aom_timing', etc
-        if expCfg.MW_power >= 9:      # Quit program if the MW power is greater/equals 9 dBm
+        if expCfg.MW_power >= 13:      # Quit program if the MW power is greater/equals 9 dBm
             print("Input Microwave Power to the RF Amplifier is + "+expCfg.MW_power+" dBm. Reduce it to 8 dBm or less.")
             sys.exit()
         else:
@@ -343,7 +343,7 @@ def sequence_event_cataloguer(allPBchannels):
     * eventTime: (int) gives the start and end times of a particular component (AOM/DAQ/MW)
     * eventChannelMask: (int) stores the PB channel which changes at the 'eventTime'
     * channelBitMask: (dictionary)
-"""
+    """
     # Catalogs sequence events in terms of consecutive rising edges on the allPBchannels provided. Returns a dictionary, channelBitMasks, whose keys are event (rising/falling edge) times and values are the channelBitMask which indicate which allPBchannels are on at that time.
     eventCatalog = {}  # dictionary where the keys are rising/falling edge times and the values are the channel bit masks which turn on/off at that time
 
@@ -422,10 +422,14 @@ def param_err_check(instr, sequence, PBchannels, seqArgList, parameter=[0,1], Ns
 """
 
 def make_sequence(instr, sequence, args):
-    if instr == 'cam':
+    if instr == 'cam' or instr == 'cam_levelm':
         var = {'esr_seq':cam_seq.make_esr_seq_camera,   'rabi_seq':cam_seq.make_rabi_seq_camera_FL,
                'pesr_seq': cam_seq.make_pulsed_esr_seq_camera_FL,  'T1ms0': cam_seq.make_t1_seq_camera}
-    
+        
+    elif instr == 'cam_level1':
+        var = {'esr_seq':cam_seq.make_esr_seq_camera_level_trigger,   'rabi_seq':cam_seq.make_rabi_seq_camera_level_trigger,
+               'pesr_seq': cam_seq.make_pulsed_esr_seq_camera_level_trigger,  'T1ms0': cam_seq.make_t1_seq_camera_level_trigger}
+        
     elif instr == 'diode':
         var = {'esr_seq':daq_seq.make_esr_seq,   'modesr':daq_seq.make_mod_esr_seq,
                'rabi_seq':daq_seq.make_rabi_seq,    'spin_echo':daq_seq.make_echo_seq_FL,

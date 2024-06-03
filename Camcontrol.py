@@ -63,7 +63,8 @@ class Ui_MainWindow(QtWidgets.QWidget):
         exp_time=10;
         cam["exposure_time"] = exp_time/1e3;    # in ms (initial value for widget)
         frames = get_frames(cam);        shape = frames.shape
-        plt.imshow(frames,vmin=0,vmax=2**16); plt.colorbar()
+        # plt.imshow(frames,vmin=0,vmax=2**16); plt.colorbar()
+        plt.imshow(frames,vmin=np.min(frames),vmax=np.max(frames)); plt.colorbar()
         while True:
             exp_time, done2 = QtWidgets.QInputDialog.getInt(self, 'Exposure', 'Enter exposure time [ms]:',value=exp_time,min=1,max=10000)
             if not done2:
@@ -74,7 +75,7 @@ class Ui_MainWindow(QtWidgets.QWidget):
             frames = get_frames(cam);
             # shape = frames.shape
             # for i in range(0,shape[2]):
-            plt.imshow(frames,vmin=0,vmax=2**16)
+            plt.imshow(frames,vmin=np.min(frames),vmax=np.max(frames))
             plt.pause(0.000001)
 
 def open_camera():
@@ -95,18 +96,20 @@ def close_camera(cam):
      cam.close()
      ham.dcam.__exit__()
 
-def configure_camera(cam):
+def configure_camera(cam, instr):
+    
+    # print the output trigger options that have been set in the function (use dictionary)
     cam["trigger_mode"] = 1         # Normal(1) and start(6) trigger as options
     # cam["exposure_time"] = 0.3
     cam["trigger_source"] = 2       # Internal(1), external(2), software(3), master_pulse(4)
     cam["trigger_polarity"] = 2     # +ve(1), -ve(2)
-    cam["trigger_active"] = 3       # Edge(1), Level(2), Syncreadout(6)
+    cam["trigger_active"] = 2 if instr == 'cam_level' else 3      # Edge(1), Level(2), Syncreadout(3)
     cam["trigger_times"] = 1        # kotogulo trigger pulse er pore current exposure ta sesh hobe
-    # cam["output_trigger_source[0]"] = ?
-    # cam["output_trigger_polarity[0]"] = ?
-    # cam["output_trigger_delay[0]"] = ?
-    # cam["output_trigger_period[0]"] = 1e-6
-    # cam["output_trigger_kind[0]"] = ?
+    cam['output_trigger_kind[0]'] = 3       # LOW(1), EXPOSURE(2), PROGRAMABLE(3), TRIGGER READY(4), HIGH(5)
+    cam["output_trigger_polarity[0]"] = 2   # NEGATIVE(1), POSITIVE(2)
+    cam["output_trigger_source[0]"] = 6     # only for PROGRAMMABLE(3) option above: READOUT END(2), VSYNC(3), TRIGGER(6)
+    cam["output_trigger_delay[0]"] = 0      # only for PROGRAMMABLE(3) option above: delay of the output trigger from the edge of the event in seconds (0 to 10 seconds)
+    cam["output_trigger_period[0]"] = 1e-6  # only for PROGRAMMABLE(3) option above: On time duration of the trigger pulse in seconds (1 us to 10 seconds)
     # cam["output_trigger_base_sensor[0]"] = 
 
 def set_roi(cam,roi=[0,0,2048,2048],status=False):
@@ -193,10 +196,10 @@ def select_roi(cam,roi=[]):
     # display the selected ROI
     plt.figure("Image from select_roi(): W="+str(roi[2])+", H="+str(roi[3])+ time.strftime(" [%H:%M:%S]", time.localtime()))
     plt.subplot(121);
-    plt.imshow(frame,vmin=0,vmax=2**16); plt.gca().add_patch(plt.Rectangle((roi[0],roi[1]),roi[2],roi[3],edgecolor='r',facecolor='none'))
+    plt.imshow(frame,vmin=np.min(frame),vmax=np.max(frame)); plt.gca().add_patch(plt.Rectangle((roi[0],roi[1]),roi[2],roi[3],edgecolor='r',facecolor='none'))
     # plt.colorbar()
     cropped = frame[roi[1]:(roi[1]+roi[3]),roi[0]:(roi[0]+roi[2])]
-    plt.subplot(122); plt.imshow(cropped,vmin=0,vmax=2**16)
+    plt.subplot(122); plt.imshow(cropped,vmin=np.min(cropped),vmax=np.max(cropped))
     
     return roi
 

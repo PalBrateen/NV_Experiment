@@ -1,10 +1,8 @@
 #%% Initialization and Definition
 # reset
-
-import Camcontrol as camctrl; import PBcontrol_v2 as PBctrl; import sequencecontrol as seqctrl; import SGcontrol as SGctrl; import connectionConfig as conCfg
+import Camcontrol as camctrl, PBcontrol_v2 as PBctrl, sequencecontrol as seqctrl, SGcontrol as SGctrl, connectionConfig as conCfg, matplotlib.pyplot as plt, numpy as np, sys, time, dialog, cv2, os
 from spinapi import ns, us, ms, Inst
-import matplotlib.pyplot as plt; import numpy as np; from os.path import isdir, isfile; from importlib import import_module
-import sys, time, dialog, cv2, os
+from os.path import isdir, isfile; from importlib import import_module
 # %matplotlib qt5
 
 # from matlab import engine as eng
@@ -13,25 +11,32 @@ import sys, time, dialog, cv2, os
 print("\x10 \x1b[0mImports Successful...")
 plt.rcParams.update({'figure.max_open_warning': 0})     # No warnings on opening mult fig windows
 global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, SG, expCfg
-expCfgFile = 'esr'+'_config'
-N_total = []        # a 2-element list (sig and ref) for total number of repetitions.. if empty then N_total is allowed to change for each scanpt..
-trial_run = 'n'
-seq_no_plot = [0]
+
+instr = 'cam'
+expCfgFile = 't1ms0'+'_config'
+N_total = [2000,2000]        # a 2-element list (sig and ref) for total number of repetitions.. if empty then N_total is allowed to change for each scanpt..
+# N_total = []
+
+trial_run = ['n','n']       # 1st = SG, 2nd = camera
+t_exposure = 50*ms if trial_run[1]=='y' else None
+
+seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
-plotPulseSequence = True
+plotPulseSequence = False
 # t_exposure = 0.1     # in seconds.. eta dorkar o nei.. user will define it..
 livePlotUpdate = False
 
 def initialize_instr(sequence):
     try:
+        PBctrl.pb_close()
         PBctrl.configurePB()
         print('\x10 PB: \x1b[38;2;250;250;0mv'+PBctrl.pb_get_version()+'\x1b[0m')   # Display the PB board version using pb_get_version()
     except:
         print("Error Initializing PB !!")
     # finally:
     #     sys.exit()
-    if trial_run in ['n','N'] and sequence not in ['aom_timing', 'rodelay']:       # Do not initialize SG if it is a trial run or the sequence is present in the list ['aom_timing', 'rodelay']
+    if trial_run[0] == 'n' and sequence not in ['aom_timing', 'rodelay']:       # Do not initialize SG if it is a trial run or the sequence is present in the list ['aom_timing', 'rodelay']
         SG = SGctrl.initSG(conCfg.serialaddr, conCfg.model_name)      # Initialize SG using RS-232 address and the model name
         if not(SG.query('*idn?') == ''):
             print("\x10 \x1b[38;2;250;250;0mSG384 Initialized...\x1b[0m")
@@ -42,11 +47,10 @@ def initialize_instr(sequence):
             SGctrl.set_SG_amp(SG,expCfg.MW_power)
             SGctrl.setup_SG_pulse_mod(SG)
             print("SG Ext Pulse Mod Enabled...")
-        cam = camctrl.open_camera()
-        return [SG, cam]
     else:
-        print("\x10 Trial run... \x1b[38;2;250;250;0mNo SG")
-        return [None, None]
+        SG = None
+    cam = camctrl.open_camera() if trial_run[1] == 'n' else None   
+    return [SG, cam]
     
 def initialize_exp(instr, expCfg):
     # Initialize the experimental parameters and check whether the sequence can be sent to the PB...
@@ -92,40 +96,43 @@ def initialize_exp(instr, expCfg):
     if Nscanpts>0:
         print("\x10 \x1b[38;2;250;100;10m%d\x1b[0m scan pts" % Nscanpts)
     else:
-        print("\x1b[38;2;200;200;10mCheck sequences for subtle errors...\x1b[0m")
+        print("\x1b[38;2;200;200;10mSubtle errors...\x1b[0m")
     
     # Plotting the pulse sequences -------------------------------------------
     if plotPulseSequence:
+        print(expCfg.PBchannels)
         view_sequence(expCfg.sequence, expCfg.PBchannels, seqArgList, False, param, seq_no_plot, seq_plot_dpi)
         
     # Start the initial sequence now ------------
     print("Starting Initial Sequence...")
-    if trial_run in ['n','N']:
+    if trial_run[0] == 'n' or trial_run[1] == 'n':
         instructionList = [start_initial_PB_seq()]
         PBctrl.run_sequence_for_diode(instructionList)
         print("\x1b[38;2;50;250;50m----------PB Running----------\x1b[0m")
-        if expCfg.sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq','aom_timing','rodelay'] and trial_run in ['n','N']:
+        if expCfg.sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq','aom_timing','rodelay'] and trial_run[0] == 'n':
             SGctrl.set_SG_freq(SG, expCfg.MW_freq)
     else:
         print("\x1b[38;2;250;250;0m----------PB NOT Running----------\x1b[0m")
 
     # Create the data save folder...
-    cwd = os.getcwd()   # current working directory - generally the NV_Experiment folder. Data folder is created a level up
+    cwd = os.getcwd()   # current working directory - generally 'NV_Experiment' folder. Data folder is created a level up
     # rfind() gives the last occurence of '\\'
     savePath = cwd[0:cwd.rfind('\\')]+ "\\Saved_Data\\" + time.strftime("%Y-%m-%d", time.localtime()) + '\\'
-    
+     
     if not (isdir(savePath)):
         os.makedirs(savePath)
     print("\x10 Save folder: \x1b[38;2;100;250;30m" + time.strftime("%Y-%m-%d", time.localtime()) + '\x1b[0m')
 
     # adjust the exposure time by viewing live image
-    camctrl.live_view(cam)      # see image live and adjust the exposure time
+    camctrl.live_view(cam) if trial_run[1]=='n' else None   # see image live and adjust the exposure time
     # now select the ROI
-    roi = camctrl.select_roi(cam, roi=[])
+    roi = camctrl.select_roi(cam, roi=[1064,1036,156,156]) if trial_run[1]=='n' else None
+    roi = [int(element/4)*4 for element in roi] if trial_run[1]=='n' else None
+    # [716, 880, 300, 300]
     # cam["exposure_time"] = 0.05
     # stop the initial PB sequence after initializing the parameters
     status = PBctrl.pb_stop(); PBctrl.errorCatcher(status);
-    return [roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList]
+    return [roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList] if trial_run[1]=='n' else [roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList]
     
 def start_initial_PB_seq():
     instructionList = []
@@ -137,15 +144,18 @@ def start_initial_PB_seq():
     return instructionList
 
 def close_all(*args):       # arguments are 'cam' and 'SG'
-    cam = args[0]
-    if trial_run in ['n','N'] and len(args)==2:
+    if trial_run[1] == 'n':
+        cam = args[0]
+        camctrl.close_camera(cam); print("\x1b[38;2;10;250;50m\x10 Camera Closed...")
+    
+    if trial_run[0] == 'n' and len(args)==2:
         SG = args[1]
         if 'SG' in vars():
             SG.write('freq2.87ghz')
             SG.write('lcal')
             SGctrl.disable_SG_op(SG)
             # SG.close()
-        camctrl.close_camera(cam); print("\x1b[38;2;10;250;50m\x10 Camera Closed...")
+        
     # PBctrl.pb_init(); 
     PBctrl.pb_stop(); PBctrl.pb_close(); print("\x10 Pulse Blaster closed...\x1b[0m")
     # return DAQclosed
@@ -244,22 +254,23 @@ def view_sequence(sequence, PBchannels, seqArgList, only_plot=False, parameter=[
             instructionList = the_list[j][0]
             inst_times = the_list[j][4]
             
-            plt.subplot(1,2,(j+1))
+            if instr == 'cam':
+                plt.subplot(1,2,(j+1))
             [t_us,channelPulses,yTicks] = seqctrl.plot_sequence(instructionList, PBchannels)
             for channel in channelPulses:
                 plt.plot(t_us, list(channel))
             plt.yticks(yTicks, PBchannels.keys())          # Include the names of the PB channels
             plt.xlabel('Time (us)')
-            plt.ylabel('Channel')
+            # plt.ylabel('Channel')
             plt.title(sequence + ' Plot. Param @ '+str(seq_no_plot[i])+': ' + str(parameter[seq_no_plot[i]]) + 'ns\nTransitions [us]: '+str([vals for vals in inst_times.values()]), fontsize=10)
     # Way to display the total no of instructions in the plot, since it will vary with different scanPts:
         # print("Total %d inst" % len(inst_times.keys()))
 
-def acquire_data(t_exposure, t_seq_total, N_total, roi, Nsamples, parameter, sequence, seqArgList, trial):
+def acquire_data(t_exposure, t_seq_total_i, N_total, roi, Nsamples, parameter, sequence, seqArgList, trial):
     # setup next scan iteration (e.g. for ESR experiment, change microwave frequency; for T2 experiment, reprogram pulseblaster with new delay)
     instructionList=[]
     if sequence in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
-        if trial in ['n','N']:
+        if trial[0] == 'n':
             SGctrl.set_SG_freq(SG, parameter)
     else:
         seqArgList[0] = parameter
@@ -270,30 +281,39 @@ def acquire_data(t_exposure, t_seq_total, N_total, roi, Nsamples, parameter, seq
     # print(instructionList)
     #--------------------eta aage chhilo... get_frames() diye acquisition--------------------
     # scan_start_time = time.perf_counter()   # stime in seconds
-    # PBctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total)
+    # PBctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total_i)
     # frames = camctrl.get_frames(cam,roi,Nsamples)    # capture frames from camera
     # PBctrl.pb_stop()
     #--------------------niche notun ta... stream() ke bhenge--------------------
-    hsize = roi[2]; vsize = roi[3];
-    frames=np.zeros((vsize,hsize,Nsamples),dtype=np.uint16);
-    # initialize Stream class: create an object of class Stream
-    stream = camctrl.ham.Stream(cam,Nsamples)   # the statement assigns the buffer according to the no of frames to acquire (Nsamples)..
-    stream.__enter__()      # enter the runtime context related to stream object
-    # PBctrl.pb_stop()        # eta dewa ta thik noi... already ekta pb_stop() achhe sesh e... eta dewa hoyechhe initial sequence ta ke stop korar jonne.. that is NOT correct...
-    camctrl.cam.start()     # produces a trigger ready pulse
-    # time.sleep(5)
-    time.sleep(0.28)        # the start() function takes <= 280 ms on the average to execute
-    scan_start_time = time.perf_counter()   # time in seconds
-    PBctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total, N_total)
+    if trial_run[1]=='n':
+        hsize = roi[2]; vsize = roi[3];
+        frames=np.zeros((vsize,hsize,Nsamples),dtype='uint16');
+        # initialize Stream class: create an object of class Stream
+        stream = camctrl.ham.Stream(cam,Nsamples)   # the statement assigns the buffer according to the no of frames to acquire (Nsamples)..
+        stream.__enter__()      # enter the runtime context related to stream object
+        # PBctrl.pb_stop()        # eta dewa ta thik noi... already ekta pb_stop() achhe sesh e... eta dewa hoyechhe initial sequence ta ke stop korar jonne.. that is NOT correct...
+        camctrl.cam.start()     # produces a trigger ready pulse
+        # time.sleep(5)
+        time.sleep(0.28)        # the start() function takes <= 280 ms on the average to execute
+        scan_start_time = time.perf_counter()   # time in seconds
+        if instr=='cam':
+            PBctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total_i, N_total)
+        elif instr=='cam_level':
+            PBctrl.run_sequence_for_camera_level_trigger(instructionList)
 
-    for i, frame_buffer in enumerate(stream):
-        # ekhane 'run_sequence' dile hbe na.. trigger er jonno wait korchhe.. tar mane frame gulo start() korar porei 'stream' hoye jaye..
-        frame = camctrl.ham.copy_frame(frame_buffer)
-        if i==0:
-            scan_end_time = time.perf_counter()
-        frames[:,:,i] = frame
-    
-    stream.__exit__()
+        for i, frame_buffer in enumerate(stream):
+            # ekhane 'run_sequence' dile hbe na.. trigger er jonno wait korchhe.. tar mane frame gulo start() korar porei 'stream' hoye jaye..
+            frame = camctrl.ham.copy_frame(frame_buffer)
+            if i==0:
+                scan_end_time = time.perf_counter()
+            frames[:,:,i] = frame
+        
+        stream.__exit__()
+    else:
+        if instr=='cam':
+            PBctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total_i, N_total)
+        elif instr=='cam_level':
+            PBctrl.run_sequence_for_camera_level_trigger(instructionList)
     status = PBctrl.pb_stop(); PBctrl.errorCatcher(status);
     
     scan_time = (scan_end_time - scan_start_time)     # in seconds
@@ -355,12 +375,9 @@ print('\x10 \x1b[38;2;250;250;0mRunning '+expCfg.saveFileName+' sequence\x1b[0m'
 seqctrl.check_params(expCfgFile)
 print("\x10 Parameter checks completed...")
 
-instr='cam'
 [roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList] = initialize_exp(instr, expCfg)
-roi = [int(element/4)*4 for element in roi];
-# roi[2] = 8; roi[3] = 12;
-hsize = roi[2]; vsize = roi[3];
-# hsize = 8; vsize =12;
+if trial_run[1]=='n':
+    hsize = roi[2]; vsize = roi[3];
 
 if (expCfg.sequence == 'esr_seq'):
     t_manip = np.zeros(len(param))
@@ -380,8 +397,8 @@ t_seq_total_ref = expCfg.t_AOM + t_manip                      # for other sequen
 t_seq_total = np.transpose(np.array([t_seq_total_sig, t_seq_total_ref]))
 
 #-------------------------- 20062023-------------------------
-
-[frames_per_cyc, Nsamples, scannedparam_write_format, data_write_format] = read_save_details(roi, Nscanpts, expCfg.Nsamples)
+if trial_run[1]=='n':
+    [frames_per_cyc, Nsamples, scannedparam_write_format, data_write_format] = read_save_details(roi, Nscanpts, expCfg.Nsamples)
 
 #-------------------------- 20062023-------------------------
 
@@ -390,117 +407,156 @@ t_seq_total = np.transpose(np.array([t_seq_total_sig, t_seq_total_ref]))
 # Nsamples = ekta scanpt e total kotogulo signal (ba reference) frames...
 # Nsamples = frames_per_cyc[0]*expCfg.Nsamples        # feed this as the 'n_frames' in capture() of Camcontrol.py... eta read_save_details() theke ashbe ebar...
 save_flag=False
-camctrl.configure_camera(cam)   # configure the camera for triggered acquisition
+if trial_run[1]=='n':
+    camctrl.configure_camera(cam,instr)   # configure the camera for triggered acquisition
 
-camctrl.set_roi(cam,roi,True)   # set the ROI for the acquisition
-t_exposure = cam["exposure_time"].value     # mind the value... in seconds !!!
+    camctrl.set_roi(cam,roi,True)   # set the ROI for the acquisition
+    t_exposure = cam["exposure_time"].value     # mind the value... in seconds !!!
 
-# cam["output_trigger_source[0]"] = 6
-cam['output_trigger_kind[0]'] = 4       # set to TRIGGER READY
-cam["output_trigger_polarity[0]"] = 2   # set to positive
+    # cam["output_trigger_source[0]"] = 6
+    cam['output_trigger_kind[0]'] = 4       # set to TRIGGER READY
+    cam["output_trigger_polarity[0]"] = 2   # set to positive
 
-display_parameters = dialog.yesno_box(expCfg.saveFileName+' Params', 'Channels\t: %s\nRuns\t: %g\nScanPts\t: %g\nSamples\t: %g\nStart\t: %g\nEnd\t: %g\nProceed ?' %(str(conCfg.input_terminals), expCfg.Nruns, Nscanpts, expCfg.Nsamples, param[0]/expCfg.plotXaxisUnits, param[-1]/expCfg.plotXaxisUnits))
 status = PBctrl.pb_stop(); PBctrl.errorCatcher(status);
+display_parameters = dialog.yesno_box(expCfg.saveFileName+' Params', 'Channels\t: %s\nRuns\t: %g\nScanPts\t: %g\nSamples\t: %g\nStart\t: %g\nEnd\t: %g\nProceed ?' %(str(conCfg.input_terminals), expCfg.Nruns, Nscanpts, expCfg.Nsamples, param[0]/expCfg.plotXaxisUnits, param[-1]/expCfg.plotXaxisUnits))
 if display_parameters == 'yes':
-    try:
-        # continue_run = 'yes'
-        # DAQclosed = False;
-        # save_flag = False
-        # DAQtask = DAQctrl.configure_daq(Nsamples)        # configure_daq() accepts no. of samples to read from DAQ-AI & returns the task created; variable 'readTask'
-        # print("Exposure time: %0.1f ms" %(cam["exposure_time"].value * 1e3))
-        print("\x10 Camera configured for %d frames..." % expCfg.Nsamples)  # expCfg.Nsamples=1 (default) - ekta scanpt e ekta e frame
-        print('\x10 %d frames in each cycles...' % frames_per_cyc[0])
-        # from above, the total number of frames to acquire is thus frames_per_cyc[0]*expCfg.Nsamples = Nsamples
-        
-        print("------Acquiring %dx%d------" % tuple([roi[2], roi[3]]))
-        for i_run in range(0, expCfg.Nruns):
-            data_raw = np.zeros((vsize*Nscanpts,hsize*Nsamples));   # note the dimension...
-            scan_time_list = []   # time (in seconds) for each scannedParam
-            # print("\x10",i_run+1,'/',expCfg.Nruns)
-            start_time = time.perf_counter()        # in seconds
-            for i_scanpt in range (0, Nscanpts):
-                print("\x10 ",i_scanpt+1,' / ',Nscanpts,': ',param[i_scanpt])
-                # print("Exp [ms]: ",(cam["exposure_time"].value)*1e3)
-                # expCfg.t_AOM = t_AOM*param[i_scanpt]/param[0]
-                # print("t_AOM [ns] ",expCfg.t_AOM)
-                # sequenceArgs = expCfg.updateSequenceArgs()
-                # seqArgList = [param[i_scanpt]]
-                # seqArgList.extend(sequenceArgs)
-                # print(seqArgList)
-                [frames, scan_time, instructionList] = acquire_data(t_exposure*1e9, t_seq_total[i_scanpt], N_total, roi, Nsamples, param[i_scanpt], expCfg.sequence, seqArgList, trial_run)
-                data_raw[i_scanpt*vsize:(i_scanpt+1)*vsize,:] = np.concatenate(tuple(frames[:,:,j] for j in range(0,Nsamples)), axis=1)       # 2d-array... ekhane for j in range(0,frames_per_cyc[0]) chhilo... otake range(0,Nsamples) kore dilam.. think.. concat korte gele j should run over all the frames.. jodi total 4 frames thake (2 sig, 2 ref), then j=0,1,2,3...
-                scan_time_list.append(scan_time)    # in seconds
+    if trial_run[1]=='n':
+        try:
+            # continue_run = 'yes'
+            # DAQclosed = False;
+            # save_flag = False
+            # DAQtask = DAQctrl.configure_daq(Nsamples)        # configure_daq() accepts no. of samples to read from DAQ-AI & returns the task created; variable 'readTask'
+            # print("Exposure time: %0.1f ms" %(cam["exposure_time"].value * 1e3))
+            print("\x10 Camera configured for %d frames..." % expCfg.Nsamples)  # expCfg.Nsamples=1 (default) - ekta scanpt e ekta e frame
+            print('\x10 %d frames in each cycles...' % frames_per_cyc[0])
+            # from above, the total number of frames to acquire is thus frames_per_cyc[0]*expCfg.Nsamples = Nsamples
+            
+            print("------Acquiring %dx%d------" % tuple([roi[2], roi[3]]))
+            for i_run in range(0, expCfg.Nruns):
+                data_raw = np.zeros((vsize*Nscanpts,hsize*Nsamples),dtype='uint16')   # note the dimension...
+                scan_time_list = []   # time (in seconds) for each scannedParam
+                # print("\x10",i_run+1,'/',expCfg.Nruns)
+                start_time = time.perf_counter()        # in seconds
+                for i_scanpt in range (0, Nscanpts):
+                    # time.sleep(5)
+                    # if i_scanpt>0:
+                    #     break
+                    print("\x10 ",i_scanpt+1,' / ',Nscanpts,': ',param[i_scanpt])
+                    # print("Exp [ms]: ",(cam["exposure_time"].value)*1e3)
+                    # expCfg.t_AOM = t_AOM*param[i_scanpt]/param[0]
+                    # print("t_AOM [ns] ",expCfg.t_AOM)
+                    # sequenceArgs = expCfg.updateSequenceArgs()
+                    # seqArgList = [param[i_scanpt]]
+                    # seqArgList.extend(sequenceArgs)
+                    # print(seqArgList)
+                    [frames, scan_time, instructionList] = acquire_data(t_exposure*1e9, t_seq_total[i_scanpt], N_total, roi, Nsamples, param[i_scanpt], expCfg.sequence, seqArgList, trial_run)
+                    data_raw[i_scanpt*vsize:(i_scanpt+1)*vsize,:] = np.concatenate(tuple(frames[:,:,j] for j in range(0,Nsamples)), axis=1)       # 2d-array... ekhane for j in range(0,frames_per_cyc[0]) chhilo... otake range(0,Nsamples) kore dilam.. think.. concat korte gele j should run over all the frames.. jodi total 4 frames thake (2 sig, 2 ref), then j=0,1,2,3...
+                    scan_time_list.append(scan_time)    # in seconds
 
-            end_time = time.perf_counter()          # in seconds
+                end_time = time.perf_counter()          # in seconds
+                exec_time = end_time - start_time       # in seconds
+                processed_data = process_data(i_scanpt, roi, Nsamples, data_raw)    # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
+                plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel, expCfg.plotXaxisUnits, roi, Nsamples, live=False)
+                print("\x10 Execution time = %.2fs" % exec_time)        # in seconds
+                print("\x10 Scan time = %.2fs" % np.sum(scan_time_list))   # in seconds; scan_time_list in seconds
+                # Close all if this is the last run
+                if i_run+1 == expCfg.Nruns:
+                    if expCfg.sequence not in ['aom_timing','rodelay']:
+                        if trial_run[0] == 'n' and trial_run[1] == 'n':
+                            close_all(cam, SG)
+                        elif trial_run[0] == 'y' and trial_run[1] == 'n':
+                            close_all(cam)
+                        elif trial_run[1] == 'y' and trial_run[0] == 'n':
+                            close_all(SG)
+                        # a=1
+                
+                savefile_yn = dialog.yesno_box('Data Saving',"Save data to file?")
+                if savefile_yn == 'yes':
+                    # Data file saving
+                    if save_flag == False:          # Ask for file number iff no save was performed
+                        [paramfilename, datafilename, file_number] = prepare_for_saving(savePath)
+                    save_flag = save_data(datafilename, data_raw, data_write_format, scannedparam_write_format, param)
+                else:
+                    print("\x10 \x1b[38;2;250;50;10mData NOT saved !!!\x1b[0m")
+                if (i_run+1) < expCfg.Nruns:
+                    continue_run = dialog.yesno_box('Continue',"Continue Run?")
+                    if continue_run == 'yes':
+                        continue
+                    else:
+                        sys.exit("Run Interrupted...")
+                    
+        except KeyboardInterrupt:
+            end_time = time.perf_counter()
             exec_time = end_time - start_time       # in seconds
+            print('\x1b[38;2;250;100;0mUser Interrupted. Quitting...\x1b[0m')
+            # Plot the last run data upto the point where it was interrupted...
             processed_data = process_data(i_scanpt, roi, Nsamples, data_raw)    # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
             plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel, expCfg.plotXaxisUnits, roi, Nsamples, live=False)
-            print("\x10 Execution time = %.2fs" % exec_time)        # in seconds
-            print("\x10 Scan time = %.2fs" % np.sum(scan_time_list))   # in seconds; scan_time_list in seconds
-            # Close all if this is the last run
-            if i_run+1 == expCfg.Nruns:
-                close_all(cam, SG) if trial_run in ['n','N'] and expCfg.sequence not in ['aom_timing','rodelay'] else close_all(cam)
-                # a=1
-            
+            # Then ask whether to save it...
             savefile_yn = dialog.yesno_box('Data Saving',"Save data to file?")
             if savefile_yn == 'yes':
-                # Data file saving
-                if save_flag == False:          # Ask for file number iff no save was performed
+                # Ask for filename only if there was no save operation
+                if save_flag == False:
                     [paramfilename, datafilename, file_number] = prepare_for_saving(savePath)
                 save_flag = save_data(datafilename, data_raw, data_write_format, scannedparam_write_format, param)
-            else:
-                print("\x10 \x1b[38;2;250;50;10mData NOT saved !!!\x1b[0m")
-            if (i_run+1) < expCfg.Nruns:
-                continue_run = dialog.yesno_box('Continue',"Continue Run?")
-                if continue_run == 'yes':
-                    continue
-                else:
-                    sys.exit("Run Interrupted...")
-                
-    except KeyboardInterrupt:
-        end_time = time.perf_counter()
-        exec_time = end_time - start_time       # in seconds
-        print('\x1b[38;2;250;100;0mUser Interrupted. Quitting...\x1b[0m')
-        # Plot the last run data upto the point where it was interrupted...
-        processed_data = process_data(i_scanpt, roi, Nsamples, data_raw)    # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
-        plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel, expCfg.plotXaxisUnits, roi, Nsamples, live=False)
-        # Then ask whether to save it...
-        savefile_yn = dialog.yesno_box('Data Saving',"Save data to file?")
-        if savefile_yn == 'yes':
-            # Ask for filename only if there was no save operation
-            if save_flag == False:
-                [paramfilename, datafilename, file_number] = prepare_for_saving(savePath)
-            save_flag = save_data(datafilename, data_raw, data_write_format, scannedparam_write_format, param)
-    # nicher ei 'else' ta kno dewa hoyechhilo??? 18-06-2023
-    # else:
-    #     if (i_run+1)==expCfg.Nruns: # Save data of the final run here
-    #         save_data(len(conCfg.input_terminals), datafilename, data_raw, data_write_format, expCfg.Nsamples, reads_per_cyc)
-    finally:
-        close_all(cam, SG) if trial_run in ['n','N'] and expCfg.sequence not in ['aom_timing','rodelay'] else close_all(cam)
-        
-        print("\x10 Read \x1b[38;2;250;150;50m%d*%d\x1b[0m frames at each pt." % (frames_per_cyc[0], expCfg.Nsamples))
-        
-        print("\x10 len(frames) = \x1b[38;2;250;150;50m%d\x1b[0m" % len(frames))
-        # Save parameters (only if there was one save operation)...
-        if save_flag:
-            expParamList[1] = i_scanpt+1        # expParamList[1] -> value of N_scanPts
-            expParamList[3] = i_run+1           # expParamList[3] -> value of Nruns
-            save_parameters(paramfilename, param_save_format, expParamList)
+        # nicher ei 'else' ta kno dewa hoyechhilo??? 18-06-2023
+        # else:
+        #     if (i_run+1)==expCfg.Nruns: # Save data of the final run here
+        #         save_data(len(conCfg.input_terminals), datafilename, data_raw, data_write_format, expCfg.Nsamples, reads_per_cyc)
+        finally:
+            # close_all(cam, SG) if trial_run in ['n','N'] and expCfg.sequence not in ['aom_timing','rodelay'] else close_all(cam)
+            if expCfg.sequence not in ['aom_timing','rodelay']:
+                if trial_run[0] == 'n' and trial_run[1] == 'n':
+                    close_all(cam, SG)
+                elif trial_run[0] == 'y' and trial_run[1] == 'n':
+                    close_all(cam)
+                elif trial_run[1] == 'y' and trial_run[0] == 'n':
+                    close_all(SG)
             
-            [next_params_format, expParamList] = extra_param_save_details(scan_time_list, exec_time)
-            save_parameters(paramfilename, next_params_format, expParamList)
-        
-        # scan_time_list in seconds; exec_time in seconds
-        #----------------------------------------------------------------------
-        
-        # matlab_engine = eng.start_matlab()
-        
-        # if expCfg.sequence == 'esr':
-        #     analysis = eng.ESR_raw_analysis()
-        
+            print("\x10 Read \x1b[38;2;250;150;50m%d*%d\x1b[0m frames at each pt." % (frames_per_cyc[0], expCfg.Nsamples))
+            
+            print("\x10 shape(frames) = \x1b[38;2;250;150;50m%d x %d x %d\x1b[0m" % np.shape(frames))
+            # Save parameters (only if there was one save operation)...
+            if save_flag:
+                expParamList[1] = i_scanpt+1        # expParamList[1] -> value of N_scanPts
+                expParamList[3] = i_run+1           # expParamList[3] -> value of Nruns
+                save_parameters(paramfilename, param_save_format, expParamList)
+                
+                [next_params_format, expParamList] = extra_param_save_details(scan_time_list, exec_time)
+                save_parameters(paramfilename, next_params_format, expParamList)
+            
+            # scan_time_list in seconds; exec_time in seconds
+            #----------------------------------------------------------------------
+            
+            # matlab_engine = eng.start_matlab()
+            
+            # if expCfg.sequence == 'esr':
+            #     analysis = eng.ESR_raw_analysis()
+    elif trial_run[1]=='y':
+        instructionList=[]
+        if expCfg.sequence in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
+            None
+        else:
+            seqArgList[0] = param[seq_no_plot[-1]]
+        the_list = PBctrl.PB_program(instr,expCfg.sequence,seqArgList)
+        # print(the_list)
+        print(t_seq_total)
+        for i in range(0, len(the_list)):
+            instructionList.append(the_list[i][0])
+        if instr=='cam':
+            PBctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total[seq_no_plot[-1]], N_total)
+        elif instr=='cam_level':
+            PBctrl.run_sequence_for_camera_level_trigger(instructionList)
+        PBctrl.pb_close(); print("\x10 Pulse Blaster closed...\x1b[0m")
 else:
     print("Dialog closed...")
-    close_all(cam, SG) if trial_run in ['n','N'] and expCfg.sequence not in ['aom_timing','rodelay'] else close_all(cam)
+    if expCfg.sequence not in ['aom_timing','rodelay']:
+        if trial_run[0] == 'n' and trial_run[1] == 'n':
+            close_all(cam, SG)
+        elif trial_run[0] == 'y' and trial_run[1] == 'n':
+            close_all(cam)
+        elif trial_run[1] == 'y' and trial_run[0] == 'n':
+            close_all(SG)
     # sys.exit()
 # return instructionList
 

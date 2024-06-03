@@ -5,7 +5,7 @@ from spinapi import ns, us, ms
 from collections import namedtuple; import sys; import numpy as np
 
 PBchannel = namedtuple('PBchannel', ['channelNumber', 'startTimes', 'pulseDurations'])
-conv_clk_sep = 10*us
+conv_clk_sep = 5*us
 pulse_width = 100*ns
 
 clk_cyc = 1e3/PBclk       # Time resolution in ns
@@ -19,18 +19,19 @@ def make_esr_seq(seq_dur):
     seq_dur = 2*seq_dur;    trig_width = clk_cyc*round(100*ns/clk_cyc)
     # readout_width = clk_cyc*round(100*ns/clk_cyc)
     readout_buffer = clk_cyc*round(100*ns/clk_cyc)
-    
+    # pd_pulse refers to the readout pulse timings; in the case of multi-channel acquisition, it refers to the last channel readout pulse...
     pd_pulse = [seq_dur/2-readout_buffer, seq_dur-readout_buffer] # seq_dur/2-readout_buffer
     # pd_pulse.extend([(seq_dur/2-readout_buffer)/2, 1.5*(seq_dur/2-readout_buffer)])
     # pd_pulse.extend([seq_dur/2-readout_buffer-1*us, seq_dur-readout_buffer-1*us])
     laser_channel = PBchannel(laser, [0], [seq_dur])
     MW_channel = PBchannel(MW, [0], [seq_dur/2]) # seq_dur/2
-    # conv_clk_channel = PBchannel(conv_clk, [pd_pulse[0]-conv_clk_sep, pd_pulse[0], pd_pulse[1]-conv_clk_sep, pd_pulse[1]], [trig_width for i in range(0,4)])    
-    samp_clk_channel = PBchannel(samp_clk, [(pulse-200*ns) for pulse in pd_pulse], [trig_width for i in range(0,len(pd_pulse))]) #-conv_clk_sep-pulse_width
     start_trig_channel = PBchannel(start_trig, [0], [trig_width])
+
+    samp_clk_channel = PBchannel(samp_clk, [(pulse-conv_clk_sep-pulse_width) for pulse in pd_pulse], [trig_width for i in range(0,len(pd_pulse))]) #-conv_clk_sep-pulse_width
+    conv_clk_channel = PBchannel(conv_clk, [pd_pulse[0]-conv_clk_sep, pd_pulse[0], pd_pulse[1]-conv_clk_sep, pd_pulse[1]], [trig_width for i in range(0,4)])
     
     allPBchannels = [laser_channel, samp_clk_channel, MW_channel, start_trig_channel]
-    # allPBchannels.extend([conv_clk_channel])
+    allPBchannels.extend([conv_clk_channel])
     return allPBchannels
 #------------------------------------------------------------------------------
 def make_double_mod_sequence(MW_freq, laser_freq):
@@ -429,7 +430,7 @@ def make_rabi_seq(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
         allPBchannels = [shortPulseChannel, MWchannel]  # Short pulse feature
     else:
         # MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag], [t_MW])
-        MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag, 0*us+AOM_lag-MW_lag+t_drive+t_AOM], [t_MW,t_MW])
+        MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag], [t_MW])
         allPBchannels = [MWchannel]
     
     # conv_clk_channel = PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
