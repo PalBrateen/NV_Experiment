@@ -23,8 +23,8 @@ clk_cyc = 1e3/PBclk # Time resolution in ns
 
 #%% Microwave scan parameters:----------------------------------------------------
 MW_power = 8          # Microwave power output from SRS(dBm)
-MW_freq = 2821 /1e3*GHz
-t_duration = 364 *ns         # Duration of pi-pulse
+MW_freq = 2850 /1e3*GHz
+t_duration = 108 *ns         # Duration of pi-pulse
 # The duration of pi-by-2 pulse is calculated in 'sequenceControl'
 
 startinterval = -1000 *ns     # Start interval (in nanoseconds)
@@ -34,14 +34,14 @@ N_scanPts = round((endinterval - startinterval)/step_size + 1)
 # N_scanPts = 1501              # Number of pulse length steps
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 10 * us                    # AOM pulse duration (ns)
+t_AOM = 20 * us                    # AOM pulse duration (ns)
 ro_delay = 300 * ns      # Readout delay (ns)
-AOM_lag = (830) * ns
+AOM_lag = (800) * ns
 MW_lag = 150 * ns
 
 tau = 10 *us
 
-Nsamples = 10000                  # Number of FL ssamples to take at each pulse length poin
+Nsamples = 1                  # Number of FL ssamples to take at each pulse length poin
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------

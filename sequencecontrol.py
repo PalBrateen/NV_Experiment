@@ -1,6 +1,6 @@
 # sequencecontrol.py
 #%% Imports
-from connectionConfig import laser, samp_clk, start_trig, conv_clk, I, Q, MW, PBclk, camera
+from connectionConfig import laser, samp_clk, start_trig, I, Q, MW, PBclk, camera
 from spinapi import ns, us, ms
 import PBcontrol_v2 as PBctrl
 import sys
@@ -47,7 +47,8 @@ def check_params(config_file):
             print("Input Microwave Power to the RF Amplifier is + "+expCfg.MW_power+" dBm. Reduce it to 8 dBm or less.")
             sys.exit()
         else:
-            print("\t\x10 MW Power = "+str(expCfg.MW_power)+" dBm")
+            # print("\t\x10 MW Power = "+str(expCfg.MW_power)+" dBm")
+            None
             
     if expCfg.sequence in ['aom_timing', 'rodelay']:
         if step_size < 5*clk_cyc:
@@ -141,7 +142,8 @@ def check_params(config_file):
             print('Error: requested time step =',step_size,'ns, which is shorter than',clk_cyc,'ns. Please change N_scanPts, or ',expCfg.scanStartName,' and ',expCfg.scanEndName,' to increase time step size.')
             sys.exit()
         else:
-            print('\t\x10 Step Size = '+str(step_size)+" > "+str(clk_cyc))
+            # print('\t\x10 Step Size = '+str(step_size)+" > "+str(clk_cyc))
+            None
             
         # If requested step size is >clk_cyc but not a multiple of clk_cyc:
         if (step_size%clk_cyc):
@@ -396,17 +398,19 @@ def param_err_check(instr, sequence, PBchannels, seqArgList, parameter=[0,1], Ns
             # (For errors) Plot the sequence with the title format: scannedParam[i], inst_no, 
             if seq_error_count > 0:
                 n_error += 1
-                # -------plot and mark the region where the sequence becomes < 10ns-------
-                plt.figure()
-                [t_us,channelPulses,yTicks] = plot_sequence(instructionList, PBchannels)
-                for channel in channelPulses:
-                    plt.plot(t_us, list(channel))
-                plt.xlabel('Time (us)')
-                plt.ylabel('Channels')
-                plt.yticks(yTicks, PBchannels.keys())
-                plt.title('Err: scanParam='+str(parameter[i_scanpt])+'. Check Inst #: '+str([i for i in inst_error_no])+ ' @ ' + str([i/1e3 for i in error_times]) + 'us.\n Transitions at: ' + str([i for i in inst_times.values()]), color='r',fontsize=10)
-                print('\x10 Removing \x1b[38;2;250;250;0m'+str(parameter[i_scanpt])+'\x1b[0m')
-                # ---------plot done--------
+                # # -------plot and mark the region where the sequence becomes < 10ns-------
+                # plt.figure()
+                # [t_us,channelPulses,yTicks] = plot_sequence(instructionList, PBchannels)
+                # for channel in channelPulses:
+                #     plt.plot(t_us, list(channel))
+                # plt.xlabel('Time (us)')
+                # plt.ylabel('Channels')
+                # # print(yticks)
+                # # print(PBchannels.keys())
+                # # plt.yticks(yTicks, PBchannels.keys())
+                # plt.title('Err: scanParam='+str(parameter[i_scanpt])+'. Check Inst #: '+str([i for i in inst_error_no])+ ' @ ' + str([i/1e3 for i in error_times]) + 'us.\n Transitions at: ' + str([i for i in inst_times.values()]), color='r',fontsize=10)
+                # print('\x10 Removing \x1b[38;2;250;250;0m'+str(parameter[i_scanpt])+'\x1b[0m')
+                # # ---------plot done--------
                 if parameter[i_scanpt] in param:
                     param.remove(parameter[i_scanpt])
                 not_param.append(parameter[i_scanpt])
@@ -424,7 +428,8 @@ def param_err_check(instr, sequence, PBchannels, seqArgList, parameter=[0,1], Ns
 def make_sequence(instr, sequence, args):
     if instr == 'cam' or instr == 'cam_levelm':
         var = {'esr_seq':cam_seq.make_esr_seq_camera,   'rabi_seq':cam_seq.make_rabi_seq_camera_FL,
-               'pesr_seq': cam_seq.make_pulsed_esr_seq_camera_FL,  'T1ms0': cam_seq.make_t1_seq_camera}
+               'pesr_seq': cam_seq.make_pulsed_esr_seq_camera_FL,  'T1ms0': cam_seq.make_t1_seq_camera,
+               'T2_seq': cam_seq.make_t2_seq}
         
     elif instr == 'cam_level1':
         var = {'esr_seq':cam_seq.make_esr_seq_camera_level_trigger,   'rabi_seq':cam_seq.make_rabi_seq_camera_level_trigger,

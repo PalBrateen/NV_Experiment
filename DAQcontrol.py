@@ -63,14 +63,15 @@ def read_daq(task,Nsamples,timeout=120):
 # def read_daq_counter(task):
     
 def coil_calibration(output_field: list):
-    calibration = [26.5, 26.8, 43.5]
+    # calibration = [26.5, 26.8, 43.5]
+    calibration = [19,19,37]
     output_aovoltage = [field/calib for field, calib in zip(output_field, calibration)]
     return output_aovoltage
 
-def config_ao(dev='P6363'):
+def config_ao(dev: str):
     """AO voltage sw operation."""
     try:
-        ao_task = nidaqmx.Task()
+        ao_task = nidaqmx.Task("Coil_control")
 
         ao_task.ao_channels.add_ao_voltage_chan(dev+"/ao0")
         ao_task.ao_channels.add_ao_voltage_chan(dev+"/ao1")
@@ -83,9 +84,31 @@ def config_ao(dev='P6363'):
 
 def start_ao(ao_task, data):
     """Start AO"""
-    print(ao_task.write(data, auto_start=True))
+    print(f"AO data = {data}")
+    ao_task.write(data, auto_start=True)
 
     return True
 
+#%%
 # examples...
-# print(coil_calibration([60,60,60]))
+if __name__ == '__main__':
+#%%
+    import time, matplotlib.pyplot as plt
+    t=[]
+    ao_task = config_ao("U9263")
+    time.sleep(1)
+    for i in range(0,int(1e1)):
+        t1 = time.perf_counter()
+        start_ao(ao_task, [i,i,i])
+        t2 = time.perf_counter()
+        t.append((t2-t1)*1e3)
+    plt.figure(); plt.plot(t)
+    plt.figure(); plt.hist(t)
+    start_ao(ao_task,[0,0,0])
+    close_daq_task(ao_task)
+    # print(coil_calibration([60,60,60]))
+    # %%
+    ao_task = config_ao("U9263")
+    #%%
+    start_ao(ao_task, [0,0,0])
+    # %%

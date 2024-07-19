@@ -1,7 +1,7 @@
 # SGcontrol
-
+#%%
 import pyvisa as visa
-import sys
+import sys, time, matplotlib.pyplot as plt
 # Frequency unit multiplier definitions
 Hz = 1
 kHz = 1e3
@@ -34,15 +34,16 @@ def init_sg(serialaddr='5',modelName='SG384'):
 
     """
     global SG
-    SGaddr = 'asrl'+str(serialaddr)+'::instr'      # Construct instrument identifier from serial address
+    # SGaddr = 'asrl'+str(serialaddr)+'::instr'      # Construct instrument identifier from serial address
+    SGaddr = "TCPIP0::169.254.59.63::inst0::INSTR"
     rm = visa.ResourceManager()             # Instantiate a resource manager; rm = object of type ResourceManager
     SG = rm.open_resource(SGaddr)         # Start 
     
     try:
         deviceID = SG.query('*IDN?')       # Try quering SG identity
         print("\x10 \x1b[38;2;250;250;0mSG384 Init'd...\x1b[0m")
-        SG.write('*CLS')
-        SG.write('remt')
+        # SG.write('*CLS')
+        # SG.write('remt')
         SG.write('disp2')
         return SG
         
@@ -96,7 +97,7 @@ def set_SG_freq(freq, units='Hz'):
     """
     global SG
     SG.write('FREQ'+str(freq)+''+units)
-    SG_err_check()
+    # SG_err_check()
 
 def set_SG_disp(disp):
     global SG
@@ -175,3 +176,22 @@ def query_mod_status():
     else:
         print('SG modulation is off.')
     return mod_status
+#%%
+if __name__ == '__main__':
+    # sg = init_sg()
+    t=[]
+    for i in range(0,int(1e1)):
+        freq = 2.87e9 + 10*i
+        t1 = time.perf_counter()
+        # print(freq)
+        set_SG_freq(freq)
+        t2 = time.perf_counter()
+        t.append((t2-t1)*1e3)
+
+    plt.figure(); plt.hist(t)
+    plt.figure(); plt.plot(t)
+    #%%
+    sg = init_sg()
+# %%
+    uninit_sg()
+# %%

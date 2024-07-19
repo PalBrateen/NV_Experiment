@@ -1,11 +1,8 @@
 #PBcontrol.py
-
+#%%
 from ctypes import *
 from spinapi import *
-import numpy as np
-import sequencecontrol as seqctrl
-import connectionConfig as concfg
-import sys
+import numpy as np, sequencecontrol as seqctrl, connectionConfig as concfg, sys, time
 
 # the time unit is in ns.. as followed by the Pulse Blaster
 # start = [0]
@@ -29,11 +26,13 @@ def errorCatcher(statusVar):
 
     """
     if statusVar < 0:
-        print('\x1b[1;37;41m' + 'Hi.. Error:' + pb_get_error() + '\x1b[0m')
+        print('\x1b[1;37;41m' + 'Error:' + pb_get_error() + '\x1b[0m')
         # pb_init();
         pb_stop();
         pb_close()
         sys.exit()
+    else:
+        return 0
 
 
 def configurePB():
@@ -49,9 +48,14 @@ def configurePB():
     """
     pb_set_debug(1)
     status = pb_init()
-    errorCatcher(status)
+    while status < 0:
+        print(pb_get_error() + '\x1b[0m')
+        time.sleep(0.5)
+        pb_close()
+        status = pb_init()
     pb_core_clock(concfg.PBclk)
-    return 0
+    print("PB Init'd..")
+    return status
 
 
 # Define pb_inst_pbonly in a new way. It is already defined in the spinapi.py file. This method accepts inputs that are easily understandable and then converts it into the types that the function in spinapi.py file understands.
@@ -102,11 +106,11 @@ def PB_program(instr, sequence, sequenceArgs, err_check=False):
 
 def PB_program_camera(sequence, sequenceArgs, err_check=False):
     List = []
-    allPBchannels = seqctrl.make_sequence('cam', sequence,
-                                          sequenceArgs)  # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
+    allPBchannels = seqctrl.make_sequence('cam', sequence, sequenceArgs)
+    # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
     # print(allPBchannels)
-    for i in range(0,
-                   len(allPBchannels)):  # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
+    for i in range(0, len(allPBchannels)):
+        # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
         channelBitMasks = seqctrl.sequence_event_cataloguer(allPBchannels[i])
         List.append(create_PBinstruction(channelBitMasks, err_check))
     # print(List)
@@ -115,11 +119,11 @@ def PB_program_camera(sequence, sequenceArgs, err_check=False):
 
 def PB_program_camera_level_trigger_many(sequence, sequenceArgs, err_check=False):
     List = []
-    allPBchannels = seqctrl.make_sequence('cam_levelm', sequence,
-                                          sequenceArgs)  # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
+    allPBchannels = seqctrl.make_sequence('cam_levelm', sequence, sequenceArgs)
+    # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
     # print(allPBchannels)
-    for i in range(0,
-                   len(allPBchannels)):  # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
+    for i in range(0, len(allPBchannels)):
+        # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
         channelBitMasks = seqctrl.sequence_event_cataloguer(allPBchannels[i])
         List.append(create_PBinstruction(channelBitMasks, err_check))
     # print(List)
@@ -128,8 +132,8 @@ def PB_program_camera_level_trigger_many(sequence, sequenceArgs, err_check=False
 
 def PB_program_camera_level_trigger_1(sequence, sequenceArgs, err_check=False):
     List = []
-    allPBchannels = seqctrl.make_sequence('cam_level1', sequence,
-                                          sequenceArgs)  # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
+    allPBchannels = seqctrl.make_sequence('cam_level1', sequence, sequenceArgs)
+    # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
     # print(allPBchannels)
     channelBitMasks = seqctrl.sequence_event_cataloguer(allPBchannels)
     List.append(create_PBinstruction(channelBitMasks, err_check))
@@ -151,8 +155,8 @@ def PB_program_diode(sequence, sequenceArgs, err_check=False):
     instructionList : List
         DESCRIPTION.    """
     List = []
-    allPBchannels = seqctrl.make_sequence('diode', sequence,
-                                          sequenceArgs)  # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
+    allPBchannels = seqctrl.make_sequence('diode', sequence, sequenceArgs)
+    # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
     # print(allPBchannels)
     channelBitMasks = seqctrl.sequence_event_cataloguer(allPBchannels)
     List.append(create_PBinstruction(channelBitMasks, err_check))
@@ -325,9 +329,9 @@ def run_sequence_for_camera(instructionList, t_exposure, t_seq_total, N_total):
 
     N = [N_trigger, N_remaining, N_total]
 
-    # print(N)
-    # print(t_buffer)
-    # print(t_exposure)
+    print(N)
+    print(t_buffer)
+    print(t_exposure)
 
     #-----------------------------korlam.. 15/07/2023-----------------------------
 
@@ -506,9 +510,10 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     # instructionList[i]            => i=0: signal, i=1: reference
     # instructionList[0][i]         => i=0: 1st instruction of the signal part, i=1: 2nd instruction...
     # isntructionList[0][0][i]   => i=0: PBchannel number, i=1: Inst, i=2: Inst data, i=3: time (delay)
-    t_exposure = 1 *ms
+    # t_exposure = 100 *ms
     # configurePB()
-    print("Loading PB...")
+    # print("Loading PB...")
+    # print(t_exposure)
     pb_reset()
     status = pb_start_programming(PULSE_PROGRAM);
     errorCatcher(status)
@@ -521,50 +526,41 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     if N_total == []:
         # N_trigger = [int(np.floor((t_cam_response-t_jitter)/element)) for element in t_seq_total]
         # N_total = [int(np.floor((t_exposure - t_cam_response - t_jitter)/element)) for element in t_seq_total]
+        # print(t_exposure)
         N_total = [int(np.floor(t_exposure / element)) for element in t_seq_total]
         # the total time is not t_exposure-t_cam_response but only t_exposure, the t_exposure need to be adjusted to
         # t_exposure + 87.7us
-
+        
         # print(N_total)
         # need to check if (N_trigger + N_remaining) <= N_total) ??
 
         # defining the buffer times (in nanoseconds) -  time when there will be no sequence running - quiet period
         t_buffer = [t_exposure - N_t * t for (t, N_t) in zip(t_seq_total, N_total)]
-
-        # t_buffer0 = (t_exposure - t_cam_response) - N_remaining[0]*t_seq_total[0]
-        # t_buffer1 = t_cam_response - N_trigger[0]*t_seq_total[0]
-        # t_buffer2 = (t_exposure - t_cam_response) - N_remaining[1]*t_seq_total[1] 
-        # t_buffer3 = t_cam_response - N_trigger[1]*t_seq_total[1]
-        # t_buffer = [t_buffer0, t_buffer1, t_buffer2, t_buffer3]
-        # t_buffer = [clk_cyc*round(time/clk_cyc) if time>10*ns else 10.0*ns for time in t_buffer]
+        # t_exposure is just for reference.. Ask camera for actual value.. this causes problems in the odmr sequence logic
+        # t_exposure = [(t_cam_response + N_total[i] * t_seq_total[i] + t_buffer[i]) for i in range(0, len(N_total))]  # this is in ns..
+        t_exposure = [t_exposure, t_exposure]
+        # print(t_exposure)
+        # print(N_total)
 
     # -------------------------------------------------------------------------------------------
     # -------------------------revisit this below------------------------------------------------
     # -----this is the case when the sequence time varies by orders of magnitude and the exposure time needs to be modified to keep the exposure (number of photons collected) the same.....----------------
     # ------------------this can also be used to do experiments with some fixed number of repetitions of 'normal' sequences-----------------------
-    else:  # -------not changed this yet.. need to discuss this with group and decide..-----------
-
+    else:
         # change t_exposure keeping N_total constant
-        N_trigger = [int(np.floor(t_cam_response / element)) for element in t_seq_total]
-        N_remaining = [int(N_total[i] - N_trigger[i]) for i in range(0, len(N_total))]
-        t_exposure = [(t_cam_response + N_remaining[i] * t_seq_total[i]) for i in
-                      range(0, len(N_total))]  # this is in ns..
-        # defining the buffer times (in nanoseconds) -  time when there will be no sequence running - quiet period
-        t_buffer1 = t_cam_response - N_trigger[0] * t_seq_total[0]
-        t_buffer3 = t_cam_response - N_trigger[1] * t_seq_total[1]
-        t_buffer0 = 0
-        t_buffer2 = 0
-
-        t_buffer1 = t_buffer1 if t_buffer1 >= 10 * ns else 10 * ns
-        t_buffer3 = t_buffer3 if t_buffer3 >= 10 * ns else 10 * ns
-
-        t_buffer = [t_buffer0, clk_cyc * round(t_buffer1 / clk_cyc), t_buffer2, clk_cyc * round(t_buffer3 / clk_cyc)]
+        # this assignment is just for user to refer... The pulse sequence loop is controlled only by 'N'
+        t_exposure = [(t_cam_response + N_total[i] * t_seq_total[i]) for i in range(0, len(N_total))]  # this is in ns..
+        # print('this also runs!!!')
+        # print(t_exposure)
+        t_buffer = [0, 10*ns]
 
     N = N_total
 
     # print('N: ', N)
-    # print('t_buffer: ', t_buffer)
+    # print(f't_seq_total = {t_seq_total}')
+    # print(f't_buffer: {t_buffer}')
     # print('t_exposure: ', t_exposure)
+    # print(f't_align = {t_align}')
 
     #-----------------------------korlam.. 24/05/2023-----------------------------
 
@@ -577,15 +573,22 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     #------------------------------------------------------------------------------------
 
     # part 1: aligning the propeller
-    DAQ_AO_CH = concfg.bx ^ concfg.by ^ concfg.bz
-    pbchannels = DAQ_AO_CH ^ concfg.laser ^ concfg.MW
-    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align);
+    DAQ_AO_CH = concfg.bx
+    # DAQ_AO_test = concfg.by ^ concfg.bz
+
+    pbchannels = concfg.bz #^ concfg.laser# ^ concfg.MW
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
     errorCatcher(status)
+    pbchannels = concfg.bx #^ concfg.laser# ^ concfg.MW
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
+    errorCatcher(status)
+    
     # print(pbchannels, Inst.CONTINUE, 0, t_align)
     start = [0]  # store the 'start' points of the sequence: 1st instruction and loop start points
 
     # part 2: camera exposure edge and subsequent delay
-    pbchannels = concfg.camera ^ concfg.laser
+    # do we need laser here?
+    pbchannels = concfg.camera #^ concfg.laser #^ concfg.MW 
     status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_cam_response);
     errorCatcher(status)
     # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
@@ -595,51 +598,55 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     if N[0] >= 1:  # use the else case for ODMR!!!!!!!!!
         started = False
         for i in range(0, len(instruction) - 1):
-            print('instruction[i]: ', instruction[i])
+            # print(f'instruction[{i}]= {instruction[i]}')
             if started:
                 # middle instructions...
                 pbchannels = instruction[i][0] ^ concfg.camera
                 status = pb_inst_pbonly(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3]);
                 errorCatcher(status)
-                print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
+                # print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
             else:
                 # first instruction.. with Inst.LOOP and repetitions N_trigger(_signal)[0]
                 # start[1]
                 pbchannels = instruction[0][0] ^ concfg.camera
                 start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, N[0], instruction[0][3]));
                 errorCatcher(start[1])
-                print(pb_inst_pbonly(pbchannels, Inst.LOOP, N[0], instruction[0][3]))
+                # print(pbchannels, Inst.LOOP, N[0], instruction[0][3])
                 started = True
 
         # the last instruction.. with Inst.END_LOOP and start point (start[2])...
         pbchannels = instruction[i + 1][0] ^ concfg.camera
         status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3]);
         errorCatcher(status)
-        print(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3])
+        # print(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3])
 
         # the buffer comes here..
         pbchannels = 0 ^ concfg.camera
-        status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else 0;
+        status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else 0
         errorCatcher(status)
-        print(pbchannels, Inst.CONTINUE, 0, t_buffer[0])
+        # print(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else None
 
     else:  # -------------check this out for normal ODMR!!!!!!--------------
         pbchannels = concfg.camera ^ concfg.laser ^ concfg.MW
         # start[1]
         # there is no buffer in this case
         # Exposure and laser happens for the same time
-        start.append(pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_exposure));
+        start.append(pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_exposure[0]));
         errorCatcher(start[1])
-        # print(pbchannels, Inst.CONTINUE, 0, t_exposure)
+        # print(pbchannels, Inst.CONTINUE, 0, t_exposure[0])
 
     # part 4: aligning the propeller:
-    pbchannels = DAQ_AO_CH ^ concfg.laser ^ concfg.MW
-    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align);
+    pbchannels = concfg.bz #^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
     errorCatcher(status)
     # print(pbchannels, Inst.CONTINUE, 0, t_align)
+    pbchannels = concfg.bx #^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
+    errorCatcher(status)
 
     # part 5: camera exposure edge and subsequent delay
-    pbchannels = concfg.camera ^ concfg.laser
+    # do we need laser here?
+    pbchannels = concfg.camera #^ concfg.laser
     status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_cam_response);
     errorCatcher(status)
     # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
@@ -649,41 +656,41 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     if N[1] >= 1:  # use the else case for ODMR!!!!!!!!!
         started = False
         for i in range(0, len(instruction) - 1):
-            print(instruction[i])
+            # print(f'instruction[{i}]= {instruction[i]}')
             if started:
                 # middle instructions...
                 pbchannels = instruction[i][0] ^ concfg.camera
                 status = pb_inst_pbonly(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3]);
                 errorCatcher(status)
-                print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
+                # print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
             else:
                 # first instruction.. with Inst.LOOP and repetitions N_trigger(_signal)[0]
                 # start[2]
                 pbchannels = instruction[0][0] ^ concfg.camera
                 start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, N[1], instruction[0][3]));
                 errorCatcher(start[2])
-                print(pbchannels, Inst.LOOP, N[1], instruction[0][3])
+                # print(pbchannels, Inst.LOOP, N[1], instruction[0][3])
                 started = True
 
         # the last instruction.. with Inst.END_LOOP and start point (start[2])...
         pbchannels = instruction[i + 1][0] ^ concfg.camera
         status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3]);
         errorCatcher(status)
-        print(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3])
+        # print(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3])
 
         # the buffer comes here..
         # the last instruction with Inst.BRANCH... return the control to start[0] (the first instruction)
         pbchannels = 0 ^ concfg.camera
         status = pb_inst_pbonly(pbchannels, Inst.BRANCH, start[0], t_buffer[1]) if t_buffer[1] >= 10 else 0;
         errorCatcher(status)
-        print(pbchannels, Inst.BRANCH, start[0], t_buffer[1])
+        # print(pbchannels, Inst.BRANCH, start[0], t_buffer[1]) if t_buffer[1] >= 10 else 0
 
     else:  # check this out for normal ODMR!!!!!!
         pbchannels = concfg.camera ^ concfg.laser
         # start[2]
-        start.append(pb_inst_pbonly(pbchannels, Inst.BRANCH, start[0], t_exposure));
+        start.append(pb_inst_pbonly(pbchannels, Inst.BRANCH, start[0], t_exposure[1]));
         errorCatcher(start[2])
-        # print(pbchannels, Inst.BRANCH, start[0], t_exposure)
+        # print(pbchannels, Inst.BRANCH, start[0], t_exposure[1])
     #---------------------------------------------DONE-------------------------------------------
 
     status = pb_stop_programming();
@@ -691,6 +698,17 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     status = pb_start();
     errorCatcher(status)
     # status = pb_close();                errorCatcher(status)
-    print('\x1b[38;2;250;0;0m\x10 PB STARTED\x1b[0m')
+    # print('\x1b[38;2;250;0;0m\x10 PB STARTED\x1b[0m')
     # return instructionList
     return [t_exposure, N]
+
+def run_only_daq(t_align):
+    ### Run this function to keep the manipulation ON during scanpt change
+    # DAQ_AO_CH = concfg.bx
+    instructionList = [[concfg.bz, Inst.CONTINUE, 0, t_align/2],
+                    [concfg.bx, Inst.BRANCH, 0, t_align/2]]
+    run_sequence_for_diode([instructionList])
+
+#%%
+if __name__ == '__main__':
+    configurePB()

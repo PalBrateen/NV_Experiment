@@ -5,26 +5,26 @@ from SGcontrol import Hz, kHz, MHz, GHz
 import os
 import numpy as np
 # from time import localtime, strftime
-from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, conv_clk, camera
+from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, camera
 
 clk_cyc = 1e3/PBclk #in ns
 
 #%% USER INPUT
 
 # Microwave scan parameters:----------------------------------------------------
-startFreq = 24.0 /10 * GHz          # Start frequency (in Hz)
-endFreq = 38.0 /10 * GHz             # End frequency (in Hz)
-step_size = 2 *MHz
+startFreq = 28.2 /10 * GHz          # Start frequency (in Hz)
+endFreq = 29.2 /10 * GHz             # End frequency (in Hz)
+step_size = 1 *MHz
 N_scanPts = round((endFreq - startFreq)/step_size + 1)             # Number of frequency steps
 # N_scanPts = 5
 MW_power = 0         # Microwave power output from SRS(dBm)
 SRSdisplay = 'disp2'
 
 # Pulse sequence parameters:----------------------------------------------------
-t_AOM = 80 *us          # Duration of one-half of signal-aquisition half
+t_AOM = 8000 *ms          # Duration of one-half of signal-aquisition half
 # t_AOM = 5 *ms
 t_tot = 2*t_AOM
-Nsamples = 2500             # Number of FL samples to take at each frequency point
+Nsamples = 2             # Number of FL samples to take at each frequency point
 Nruns = 1                    # Number of averaging runs to do
 contrast_mode = 'ratio_signal_over_reference'       # Contrast mode
 
@@ -47,7 +47,8 @@ scannedParam = np.linspace(startFreq,endFreq, N_scanPts, endpoint=True)     # sc
 sequence = 'esr_seq'                 #Sequence string:
 scanStartName = 'startFreq'         #Scan start Name
 scanEndName = 'endFreq'             #Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk,'Samp\nCLK':samp_clk, 'MW':MW,'Laser':laser, 'Start\nTrig':start_trig, 'Camera': camera}
+PBchannels = {'Samp\nCLK':samp_clk, 'MW':MW,'Laser':laser, 'Start\nTrig':start_trig, 'Camera': camera}
+PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
 
 sequenceArgs = [t_AOM]         #Sequence args
 

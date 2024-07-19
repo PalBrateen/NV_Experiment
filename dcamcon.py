@@ -790,7 +790,7 @@ def dcamcon_uninit():
     global called_dcamapi_init
     if called_dcamapi_init:
         Dcamapi.uninit()
-        print("DCAM-API uninit'd..")
+        print("\x1b[38;2;10;250;50mDCAM-API uninit'd..")
         called_dcamapi_init = False
 
 def dcamcon_choose_and_open():

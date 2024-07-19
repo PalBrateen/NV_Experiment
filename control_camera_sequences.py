@@ -1,6 +1,6 @@
 # control_camera_sequences.py
 
-from connectionConfig import laser, samp_clk, start_trig, conv_clk, I, Q, MW, PBclk, camera
+from connectionConfig import laser, samp_clk, start_trig, I, Q, MW, PBclk, camera
 from spinapi import ns, us, ms
 from collections import namedtuple
 
@@ -119,8 +119,8 @@ def make_rabi_seq_camera_FL(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
     allPBchannels_sig = [laser_channel];
     laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
     allPBchannels_ref = [laser_channel]
-    # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
     
+    # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
     if t_MW <= 5*clk_cyc and t_MW > 0:
         MW_start_times = [0*us+AOM_lag-MW_lag for i in range(0,2)]; MW_pulse_durations = [5*clk_cyc for i in range(0,2)]
         # SHORT PULSE duration
@@ -138,6 +138,49 @@ def make_rabi_seq_camera_FL(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
     
     allPBchannels = [allPBchannels_sig, allPBchannels_ref]
     return allPBchannels
+
+def make_t2_seq(t_delay, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi):
+    """ T2 seq. 
+    Ref = FL w/o MW"""
+    t_delay = t_delay + 2*t_pi     # increase the actual laser off time to accomodate the non-zero width of the pi/2 and pi pulses so that the actual precession time is as defined by the param variable of mainControl
+
+    laser_start_times = [t_delay, t_delay]; laser_pulse_durations = [t_AOM, t_AOM]
+    laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
+    allPBchannels_sig = [laser_channel]
+    laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
+    allPBchannels_ref = [laser_channel]
+
+    MW_start_times = [[AOM_lag-MW_lag, AOM_lag+t_delay/2-MW_lag-t_pi/2, t_delay+AOM_lag-MW_lag-t_pi/2]]
+    MW_pulse_durations = [[t_pi/2, t_pi, t_pi/2]]
+    MWchannel = PBchannel(MW, MW_start_times[0], MW_pulse_durations[0])
+    allPBchannels_sig.extend([MWchannel])
+    
+    allPBchannels = [allPBchannels_sig, allPBchannels_ref]
+    return allPBchannels
+
+
+# bhul achhe kichhu ekta...
+# def make_echo_seq_MW(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi):
+#     """ Spin-echo seq. 
+#     """
+
+#     laser_start_times = [t_drive, t_drive]; laser_pulse_durations = [t_AOM, t_AOM]
+#     laser_channel = PBchannel(laser, [laser_start_times[0]], [laser_pulse_durations[0]])
+#     allPBchannels_sig = [laser_channel];
+#     laser_channel = PBchannel(laser, [laser_start_times[1]], [laser_pulse_durations[1]])
+#     allPBchannels_ref = [laser_channel]
+
+#     t_delay = delay_1st_half + delay_2nd_half + 2*t_pi# + 5*us     # increase the actual laser off time to accomodate the non-zero width of the pi/2 and pi pulses so that the actual precession time is as defined by the param variable of mainControl
+#     apd_pulse = [t_delay+AOM_lag+ro_delay, 2*t_delay+t_AOM+AOM_lag+ro_delay]
+
+#     laser_channel = PBchannel(laser, [t_delay, 2*t_delay+t_AOM], [t_AOM,t_AOM])
+#     start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
+#     MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag, 0*us+AOM_lag+t_pi/2+delay_1st_half-MW_lag, 0*us+AOM_lag+(t_delay-0*us)-MW_lag-t_pi/2], [t_pi/2, t_pi, t_pi/2])
+#     # The third MW pulse 
+#     samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-pulse_width, apd_pulse[1]-pulse_width], [pulse_width, pulse_width])
+    
+#     allPBchannels = [MWchannel, laser_channel, samp_clk_channel, start_trig_channel, conv_clk_channel]
+#     return allPBchannels
 
 def make_pulsed_esr_seq_camera_level_trigger(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi):
     exp_time = 1.05*ms

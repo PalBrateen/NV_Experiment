@@ -1,3 +1,4 @@
+# mainControl_camera_no_threads - this does not has any threading structure and will have a deadlock in capturing frames
 # %% Initialization and Definition
 # reset
 import Camcontrol_v2_0 as camctrl, PBcontrol_v2 as PBctrl, sequencecontrol as seqctrl, SGcontrol as SGctrl, \

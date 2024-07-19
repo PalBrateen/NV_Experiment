@@ -13,7 +13,7 @@ from spinapi import ns,us,ms
 from SGcontrol import GHz, kHz, MHz
 import numpy as np
 import os
-from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, conv_clk, camera
+from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, camera, bx, by, bz
 # from time import localtime, strftime
 
 clk_cyc = 1e3/PBclk # Time resolution in ns
@@ -23,21 +23,22 @@ clk_cyc = 1e3/PBclk # Time resolution in ns
 
 #%% Microwave scan parameters:----------------------------------------------------
 startPulseDuration =  10 *ns      # Start pulse duration (in nanoseconds)
-endPulseDuration = 1000 *ns      # End pulse duration (in nanoseconds)
+endPulseDuration = 500 *ns      # End pulse duration (in nanoseconds)
 step_size = 2*ns
 N_scanPts = round((endPulseDuration - startPulseDuration)/step_size + 1)
 # N_scanPts = 5              # Number of pulse length steps
 MW_power = 8                 # Microwave power output from SRS(dBm)
-MW_freq = 2527 /1e3 * GHz     # Microwave frequency (Hz)
+MW_freq = 2870 /1e3 * GHz     # Microwave frequency (Hz)
+# MW_freq = 2516 /1e3 * GHz     # Microwave frequency (Hz)
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 10*us                    # AOM pulse duration (ns)
+t_AOM = 20 *us                    # AOM pulse duration (ns)
 ro_delay = (1800)*ns      # Readout delay (ns)
-AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
-# AOM_lag = (800)*ns          # for camera
+# AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
+AOM_lag = (800)*ns          # for camera
 MW_lag = 150*ns
 
-Nsamples = 10000    # Number of signal frames to take at each scanpt
+Nsamples = 2    # Number of signal frames to take at each scanpt
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------
@@ -79,7 +80,9 @@ if 14.0 in scannedParam:
 sequence = 'rabi_seq'       #Sequence string
 scanStartName = 'startPulseDuration'        #Scan start Name
 scanEndName = 'endPulseDuration'            #Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk,'Samp\nCLK':samp_clk, 'MW':MW,'Laser':laser, 'Start\nTrig':start_trig, 'Camera': camera}
+PBchannels = {'Samp\nCLK':samp_clk, 'MW':MW,'Laser':laser, 'Start\nTrig':start_trig, 'Camera':camera, 'Bx':bx, 'By':by, 'Bz':bz}
+PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
+
 sequenceArgs = [t_AOM, ro_delay, AOM_lag, MW_lag]      #Sequence args
 
 #Make save file path

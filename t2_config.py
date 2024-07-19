@@ -9,7 +9,7 @@
 """
 
 #%%Imports
-from connectionConfig import PBclk, laser, start_trig, samp_clk, MW, conv_clk
+from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, camera, bx, by, bz
 from SGcontrol import Hz, kHz, MHz, GHz
 from spinapi import ns,us,ms
 import numpy as np
@@ -23,8 +23,8 @@ clk_cyc = 1e3/PBclk # Time resolution in ns
 
 #%% Microwave scan parameters:----------------------------------------------------
 MW_power = 8          # Microwave power output from SRS(dBm)
-MW_freq = 2734 /1e3*GHz
-t_duration = 340 *ns         # Duration of pi-pulse
+MW_freq = 2785.5 /1e3*GHz
+t_duration = 108 *ns         # Duration of pi-pulse
 # The duration of pi-by-2 pulse is calculated in 'sequenceControl'
 
 startinterval = 0.6 * us     # Start interval (in nanoseconds)
@@ -34,12 +34,13 @@ N_scanPts = round((endinterval - startinterval)/step_size + 1)
 # N_scanPts = 1501              # Number of pulse length steps
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 50 *us                    # AOM pulse duration (ns)
+t_AOM = 20 *us                    # AOM pulse duration (ns)
 ro_delay = 300 *ns      # Readout delay (ns)
-AOM_lag = (1500+500) *ns
+# AOM_lag = (1500+500) *ns
+AOM_lag = 800 *ns
 MW_lag = 150 * ns
 
-Nsamples = 2500                  # Number of FL ssamples to take at each pulse length poin
+Nsamples = 1                  # Number of FL ssamples to take at each pulse length poin
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------
@@ -74,8 +75,9 @@ scannedParam = np.linspace(startinterval, endinterval, N_scanPts, endpoint=True)
 sequence = 'T2_seq'       #Sequence string
 scanStartName = 'startinterval' 	 	#Scan start Name
 scanEndName = 'endinterval' 	 	 	#Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk, 'Samp\nCLK':samp_clk, 'MW':MW, 'Laser':laser,
-              'Start\nTrig':start_trig}
+PBchannels = {'Samp\nCLK':samp_clk, 'MW':MW,'Laser':laser, 'Start\nTrig':start_trig, 'Camera':camera, 'Bx':bx, 'By':by, 'Bz':bz}
+PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
+
 sequenceArgs = [t_AOM, ro_delay, AOM_lag, MW_lag, t_duration]      #Sequence args
 
 #Make save file path
