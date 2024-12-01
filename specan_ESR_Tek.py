@@ -18,20 +18,42 @@ except visa.errors.VisaIOError:
 #%% User inputs
 # specan
 n_averages = 4
-scan_start_freq = 200 *kHz
-scan_stop_freq = 2 *MHz
+scan_start_freq = 999 *kHz
+scan_stop_freq = 1001 *kHz
 
 # ODMR
-odmr_start_freq = int( 2.5 *GHz)
-odmr_stop_freq = int( 3.3 *GHz)
-odmr_step_freq = int( 2 *MHz)
+# advanced
+# odmr_regions = np.array([2.2, 2.5, 2.75, 2.8, 2.95, 3.0, 3.3,3.5]) *1e9
+# step_freq = np.array([20,2, 1, 0.5, 1, 2,20]) *1e6
+
+# old
+odmr_start_freq = int( 2.82 *GHz)
+odmr_stop_freq = int( 2.92 *GHz)
+odmr_step_freq = int( 1 *MHz)
+
 mw_ampl = 0
 
 #%% Set the SG and SA with the parameters for scan
-odmr_n_freq = round((odmr_stop_freq - odmr_start_freq)/odmr_step_freq + 1)
+# advanced
+# odmr_freq = []
+# for i in range(0,len(odmr_regions)-1):
+#     odmr_start_freq = odmr_regions[i]
+#     odmr_stop_freq = odmr_regions[i+1]
+#     odmr_step_freq = step_freq[i]
+#     if i==len(odmr_regions)-2:
+#         odmr_n_freq = round((odmr_stop_freq - odmr_start_freq)/odmr_step_freq+1)
+#         odmr_freq = np.append(odmr_freq,np.linspace(odmr_start_freq, odmr_stop_freq, odmr_n_freq, endpoint=True))
+#     else:
+#         odmr_n_freq = round((odmr_stop_freq - odmr_start_freq)/odmr_step_freq)
+#         odmr_freq = np.append(odmr_freq, np.linspace(odmr_start_freq, odmr_stop_freq, odmr_n_freq, endpoint=False))
 
-odmr_freq = np.linspace(odmr_start_freq,odmr_stop_freq,odmr_n_freq,endpoint=True)
 # odmr_n_freq = len(odmr_freq)
+
+# old
+odmr_n_freq = round((odmr_stop_freq - odmr_start_freq)/odmr_step_freq + 1)
+odmr_freq = np.linspace(odmr_start_freq,odmr_stop_freq,odmr_n_freq,endpoint=True)
+
+
 # print(odmr_n_freq)
 
 SG.write('ampr '+str(mw_ampl)+'dbm')
@@ -191,7 +213,9 @@ for i in range(0,odmr_n_freq):
     contrast_traces[i] = sig_trace/ref_trace
     # contrast_traces[i] = sig_trace
     # contrast_traces1[i] = ref_trace
-
+    # if i%100==0:
+    #     plt.figure(); plt.semilogy(ref_trace)
+    
 end_time = time.perf_counter()
 print("Runtime = %.2fs" % (end_time-start_time))
 
@@ -220,20 +244,20 @@ specan_freq = np.linspace(specan_start_freq,specan_stop_freq,sweep_points,endpoi
 # plt.axis([min(specan_freq), max(specan_freq),-120,-20])
 # # plt.legend('')
 
-# Plot the spectrogram
-# generate 2 2d grids for the x & y bounds
-spectrogramy, spectrogramx = np.meshgrid(odmr_freq, specan_freq, indexing='ij')
-z = contrast_traces
+# # Plot the spectrogram
+# # generate 2 2d grids for the x & y bounds
+# spectrogramy, spectrogramx = np.meshgrid(odmr_freq, specan_freq, indexing='ij')
+# z = contrast_traces
 
-fig, ax = plt.subplots(dpi=200)
+# fig, ax = plt.subplots(dpi=200)
 
-c = ax.pcolor(spectrogramx, spectrogramy, z, vmin=np.min(z), vmax=np.max(z))
-# ax.set_title('pcolormesh')
-# set the limits of the plot to the limits of the data
-ax.axis([spectrogramx.min(), spectrogramx.max(), spectrogramy.min(), spectrogramy.max()])
-fig.colorbar(c, ax=ax)
-plt.xlabel("Fourier Frequency [Hz]")
-plt.ylabel("MW Frequency [GHz]")
+# c = ax.pcolor(spectrogramx, spectrogramy, z, vmin=np.min(z), vmax=np.max(z))
+# # ax.set_title('pcolormesh')
+# # set the limits of the plot to the limits of the data
+# ax.axis([spectrogramx.min(), spectrogramx.max(), spectrogramy.min(), spectrogramy.max()])
+# fig.colorbar(c, ax=ax)
+# plt.xlabel("Fourier Frequency [Hz]")
+# plt.ylabel("MW Frequency [GHz]")
 
 #%% file saving - saving all the traces---------------------
 cwd = os.getcwd()

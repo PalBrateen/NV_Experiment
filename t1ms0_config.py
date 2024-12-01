@@ -5,7 +5,7 @@ from SGcontrol import Hz, kHz, MHz, GHz
 import os
 import numpy as np
 from time import localtime, strftime
-from connectionConfig import PBclk, laser, start_trig, samp_clk, conv_clk, MW
+from connectionConfig import PBclk, laser, start_trig, samp_clk, MW, camera
 
 clk_cyc = 1e3/PBclk         #in ns; ONE CLOCK CYCLE
 
@@ -13,29 +13,29 @@ clk_cyc = 1e3/PBclk         #in ns; ONE CLOCK CYCLE
 #%% USER INPUT
 
 # Delay/Interval scan
-start_delay = 50 *us
-end_delay = 300 *us
-step_size = 50 *us
+start_delay = 0 *ns
+end_delay = 250 *us
+step_size = 0.5 *us
 N_scanPts = round((end_delay - start_delay)/step_size + 1)
 # N_scanPts = 5
 
 # Pulse sequence parameters:----------------------------------------------------
-t_AOM = 5*us                    # AOM pulse duration (ns)
-ro_delay = (2500)*ns      # Readout delay (ns)
+t_AOM = 20*us                    # AOM pulse duration (ns)
+ro_delay = (1800)*ns      # Readout delay (ns)
 # ro_delay = 300*ns
 # AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
 AOM_lag = (800)*ns         # Time lag involved in the pulsing of the AOM
-MW_lag = 150 *ns
+MW_lag = 136 *ns
 
 # start_delay = 1*us        # Time from which the pulse sequence starts
 
-Nsamples = 1500              # Number of FL samples to take at each scan point
+Nsamples = 2              # Number of FL samples to take at each scan point
 Nruns = 1                    # Number of averaging runs to do
 # contrast_mode ='ratio_signal_over_reference'       # Contrast mode
 
 MW_power = 8                 # Microwave power output from SRS(dBm)
 MW_freq = 2870 /1e3 * GHz     # Microwave frequency (Hz)
-t_pi = 112 *ns
+t_pi = 116 *ns
 
 # Plotting options--------------------------------------------------------------
 # livePlotUpdate = True       # Live plot update option
@@ -56,14 +56,17 @@ randomize = int(True)                    # Option to randomize order of scan poi
 #------------------------- END OF USER INPUT ----------------------------------#
 
 scannedParam = np.linspace(start_delay, end_delay, N_scanPts, endpoint=True)     # readout-pulse delay
-scannedParam = np.array([500*round(i/500) for i in scannedParam])
+# print(scannedParam)
+scannedParam = np.array([(500*ns)*round(i/(500*ns)) for i in scannedParam])
+# print(scannedParam)
 # scannedParam = scannedParam[0:2]
 # N_scanPts = len(scannedParam)
 sequence = 'T1ms0'                 #Sequence string
 scanStartName = 'start_delay'         #Scan start Name
 scanEndName = 'end_delay'             #Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk, 'Samp\nCLK':samp_clk, 'uW':MW, 'Laser':laser,
-              'Start\nTrig':start_trig}
+PBchannels = {'Samp\nCLK':samp_clk, 'uW':MW, 'Laser':laser, 'Start\nTrig':start_trig, 'Camera': camera}
+PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
+
 sequenceArgs = [t_AOM, AOM_lag, ro_delay, MW_lag, t_pi]         #Sequence args
 
 # dateTimeStr = strftime("%Y-%m-%d_%Hh%Mm%Ss", localtime())       #Make save file path

@@ -1,9 +1,9 @@
 #%% Initialization and Definition
 # reset
-import DAQcontrol as DAQctrl, PBcontrol_v2 as PBctrl, sequencecontrol as seqctrl, SGcontrol as SGctrl, connectionConfig as conCfg, matplotlib.pyplot as plt
+import DAQcontrol as daqctrl, PBcontrol_v2 as pbctrl, sequencecontrol as seqctrl, SGcontrol as sgctrl, connectionConfig as concfg, matplotlib.pyplot as plt, numpy as np, sys, time, dialog, os, ametekcontrol as amctrl
 from spinapi import ns, us, ms, Inst
-import numpy as np; from os.path import isdir, isfile; from os import makedirs; from importlib import import_module
-import sys, time, dialog, os
+from os.path import isdir, isfile; from os import makedirs; from importlib import import_module
+
 # from matlab import engine as eng
 # %matplotlib qt5
 
@@ -12,9 +12,11 @@ print("\x10 \x1b[0mImports Successful...")
 plt.rcParams.update({'figure.max_open_warning': 0})     # No warnings on opening mult fig windows
 
 global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, SG, expCfg
-expCfgFile = 'esr'+'_config'
+expCfgFile = 'rabi'+'_config'
+test_field = [0,0,10]
 
-trial_run = ['n','n']       # 1st=SG, 2nd=PB
+
+trial_run = ['n','n']       # 1st=SG, 2nd=PB, 3rd=ametek
 seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
@@ -30,26 +32,54 @@ plotPulseSequence = True
 def initialize_instr(sequence):
     if trial_run[1] == 'n':
         try:
-            PBctrl.configurePB()
-            print('\x10 PB: \x1b[38;2;250;250;0mv'+PBctrl.pb_get_version()+'\x1b[0m')   # Display the PB board version using pb_get_version()
+            pbctrl.configurePB()
+            print('\x10 PB: \x1b[38;2;250;250;0mv'+pbctrl.pb_get_version()+'\x1b[0m')   # Display the PB board version using pb_get_version()
         except:
             print("Error Initializing PB !!")
     
-    if trial_run[0] == 'n' and sequence not in ['rodelay']:       # Do not initialize SG if it is a trial run or the sequence is present in the list ['rodelay']
-        SG = SGctrl.initSG(conCfg.serialaddr, conCfg.model_name)      # Initialize the SG using RS-232 address and the model name; call the initSG function in SGcontrol.py
-        if not(SG.query('*idn?') == ''):
-            print("\x10 \x1b[38;2;250;250;0mSG384 Initialized...\x1b[0m")
-            SG.write('remt')
-            SG.write('disp2')
-            SGctrl.enable_SG_op(SG)
+    if trial_run[0] == 'n' and sequence not in ['aom_timing', 'rodelay']:
+        # Do not initialize SG if it is a trial run or the sequence is present in the list ['aom_timing', 'rodelay']
+        SG = sgctrl.init_sg(concfg.serialaddr,concfg.model_name)
+        if SG != '':
+            sgctrl.enable_SG_op();
             print("SG Output Enabled...")
-            SGctrl.set_SG_amp(SG,expCfg.MW_power)
-            SGctrl.setup_SG_pulse_mod(SG)
+            sgctrl.set_SG_amp(expCfg.MW_power)
+            sgctrl.setup_SG_pulse_mod();
             print("SG Ext Pulse Mod Enabled...")
-        return SG
     else:
-        print("\x10 Trial run... \x1b[38;2;250;250;0mNo SG")
-        return None
+        SG = None
+    # if trial_run[1] == 'n':
+    #     ametek = amctrl.init_ametek();
+    #     if not(ametek.query("ID") == ''):
+    #         print("\x10 \x1b[38;2;250;250;0m7270 Initialized...\x1b[0m")
+    return [SG]
+
+
+def close_all(ai_task, SG, ao_task):   # arguments are closed, ai_task and SG
+    """End the measurement
+    Closes all the instruments.
+    """
+    if (ai_task is not None):    # Close DAQ task
+        daqctrl.close_daq_task(ai_task)
+        print("AI stopped...")
+    
+    if (ao_task is not None):
+        daqctrl.start_ao(ao_task,[0,0,0])
+        daqctrl.close_daq_task(ao_task)
+        print('AO stopped...')
+    
+    if (trial_run[0] == 'n') and (SG is not None):
+        SG.write('freq2.87ghz')
+        sgctrl.disable_SG_op()
+        sgctrl.uninit_sg()
+
+    # pbctrl.pb_init();
+    closed = True
+    pbctrl.pb_stop();
+    pbctrl.pb_close();
+    print("Pulse Blaster closed...\x1b[0m")
+    return True
+
 
 def initialize_exp(instr, expCfg):
     ###### Include trial run check so that the error plots are only displayed when it is not a trial run
@@ -74,10 +104,10 @@ def initialize_exp(instr, expCfg):
             print('\x1b[1;37;41m'+'Err: Check Sequences...\x1b[0m')
             print('\x1b[38;2;250;0;0m'+str(n_error)+' parameters removed...\x1b[0m')
 
-            # Close Error plots??
-            close_plots = dialog.yesno_box('Close Plots', 'Close the Error Plots?')
-            if close_plots == 'yes':
-                plt.close('all')
+            # # Close Error plots??
+            # close_plots = dialog.yesno_box('Close Plots', 'Close the Error Plots?')
+            # if close_plots == 'yes':
+            #     plt.close('all')
             print("\x10 Sequences checked... \x1b[38;2;100;250;0mErrors removed...\x1b[0m")
             # est_time = (2*expCfg.t_AOM*Nscanpts + sum(param))*expCfg.Nsamples
         else:
@@ -96,16 +126,16 @@ def initialize_exp(instr, expCfg):
     if plotPulseSequence:
         view_sequence(expCfg.sequence, expCfg.PBchannels, seqArgList, False, param, seq_no_plot, seq_plot_dpi)
     
-    # instructionList = PBctrl.PB_program(expCfg.sequence,seqArgList)[0]        # ekhane change chhilo.. (24/02/23)
+    # instructionList = pbctrl.PB_program(expCfg.sequence,seqArgList)[0]        # ekhane change chhilo.. (24/02/23)
 
     # Start the initial sequence now ------------
     print("Starting Initial Sequence...")
     if trial_run[1] == 'n':
         instructionList = [start_initial_PB_seq()]
-        PBctrl.run_sequence_for_diode(instructionList)
+        pbctrl.run_sequence_for_diode(instructionList)
         print("\x1b[38;2;50;250;50m----------PB Running----------\x1b[0m")
         if expCfg.sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq','rodelay'] and trial_run[0] == 'n':
-            SGctrl.set_SG_freq(SG, expCfg.MW_freq)
+            sgctrl.set_SG_freq(expCfg.MW_freq)
     else:
         # instructionList = []
         print("\x1b[38;2;250;250;0m----------PB NOT Running----------\x1b[0m")
@@ -121,27 +151,11 @@ def initialize_exp(instr, expCfg):
 def start_initial_PB_seq():
     instructionList = []
     # the default initial sequence... LASER ta sob somoy ON thakbe ekhane...
-    instructionList = [[conCfg.laser, Inst.CONTINUE, 0, 500*ms],
-                       [conCfg.laser, Inst.BRANCH, 0, 500*ms]]
+    instructionList = [[concfg.laser, Inst.CONTINUE, 0, 500*ms],
+                       [concfg.laser, Inst.BRANCH, 0, 500*ms]]
     # jodi onnyo kono initial sequence lage, eg some sequene involving a parameter, thle 'sequenceArgs' ke edit korte hbe...
     
     return instructionList
-
-def close_all(*args):   # arguments are DAQclosed, DAQtask and SG
-    DAQclosed = args[0]; DAQtask = args[1];
-    if trial_run[0] == 'n' and len(args)==3:
-        SG = args[2]
-        if 'SG' in vars():                              #Turn off SG output
-            SG.write('freq2.87ghz')
-            SG.write('lcal')
-            SGctrl.disable_SG_op(SG)
-            SG.write('lcal')
-            # SG.close()
-    if ('DAQtask' in vars()) and (not DAQclosed):    # Close DAQ task
-        DAQctrl.close_daq_task(DAQtask); DAQclosed=True; print("\x1b[38;2;10;250;50m\x10 DAQ Closed...")
-    # PBctrl.pb_init();
-    PBctrl.pb_stop(); PBctrl.pb_close(); print("\x10 Pulse Blaster closed...\x1b[0m")
-    return DAQclosed
 
 def read_save_details(sequence, n_channels, Nsamples_expCfg):
     # Enter no of [<apd>,<pd>] signals acquired in each cycle
@@ -236,13 +250,13 @@ def view_sequence(sequence, PBchannels, seqArgList, only_plot=False, parameter=[
         if only_plot == False:
             if  sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
                 seqArgList[0] = parameter[seq_no_plot[i]]
-        plt.figure(dpi = plot_dpi)
-        the_list = PBctrl.PB_program(instr,sequence,seqArgList)
+        plt.figure(num=f"{sequence} sequence plot", dpi = plot_dpi)
+        the_list = pbctrl.PB_program(instr,sequence,seqArgList)
         for j in range(0, len(the_list)):
             instructionList = the_list[j][0]
             inst_times = the_list[j][4]
-            # instructionList=PBctrl.PB_program_camera(sequence,seqArgList)[0][0]
-            # inst_times = PBctrl.PB_program_camera(sequence,seqArgList)[0][4]
+            # instructionList=pbctrl.PB_program_camera(sequence,seqArgList)[0][0]
+            # inst_times = pbctrl.PB_program_camera(sequence,seqArgList)[0][4]
             # plt.subplot(1,2,(j+1))
             [t_us,channelPulses,yTicks] = seqctrl.plot_sequence(instructionList, PBchannels)
             for channel in channelPulses:
@@ -254,18 +268,18 @@ def view_sequence(sequence, PBchannels, seqArgList, only_plot=False, parameter=[
     # Way to display the total no of instructions in the plot, since it will vary with different scanPts:
         # print("Total %d inst" % len(inst_times.keys()))
 
-def acquire_data(Nsamples, parameter, DAQtask, sequence, seqArgList, trial):
+def acquire_data(Nsamples, parameter, ai_task, sequence, seqArgList, trial):
     # setup next scan iteration (e.g. for ESR experiment, change microwave frequency; for T2 experiment, reprogram pulseblaster with new delay)
     if sequence in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
         if trial[0] == 'n':
-            SGctrl.set_SG_freq(SG, parameter)
+            sgctrl.set_SG_freq(parameter)
     else:
         seqArgList[0] = parameter
-    # instructionList = PBctrl.PB_program(instr,sequence,seqArgList)[0]
+    # instructionList = pbctrl.PB_program(instr,sequence,seqArgList)[0]
 
     # #notun ... eta lagbe
     instructionList=[]
-    the_list = PBctrl.PB_program(instr,sequence,seqArgList)
+    the_list = pbctrl.PB_program(instr,sequence,seqArgList)
     # print(the_list)
     for i in range(0, len(the_list)):
         instructionList.append(the_list[i][0])
@@ -277,24 +291,36 @@ def acquire_data(Nsamples, parameter, DAQtask, sequence, seqArgList, trial):
     #     time.sleep(20)
     # stop = time.perf_counter_ns()
 
-    PBctrl.run_sequence_for_diode(instructionList)
+    pbctrl.run_sequence_for_diode(instructionList)
     # cts = []
     scan_start_time = time.perf_counter()   # time in seconds
-    cts = DAQctrl.read_daq(DAQtask, Nsamples,61*60)    #read DAQ
+    cts = daqctrl.read_daq(ai_task, Nsamples,61*60)    #read DAQ
     scan_end_time = time.perf_counter()
     
     scan_time = (scan_end_time - scan_start_time)     # in seconds
     return [cts, scan_time]
 
 def process_data(i_max, reads_per_cyc, data_raw):
+    # note that this function can be made simpler for multi-channel acquisition
     # Process data for plotting
-    mean_sig = np.zeros(i_max);     mean_ref = np.zeros(i_max);     contrast = np.zeros(i_max);
-    signals = data_raw[:,[i for i in range(0, expCfg.Nsamples*reads_per_cyc[0], reads_per_cyc[0])]]
-    references = data_raw[:,[i for i in range(1, expCfg.Nsamples*reads_per_cyc[0], reads_per_cyc[0])]]
-    mean_sig = np.mean(signals,axis=1)
-    mean_ref = np.mean(references,axis=1)
-
-    contrast = calc_contrast(mean_sig, mean_ref, 's/r')
+    mean_sig = np.zeros((i_max, len(concfg.input_terminals)));
+    mean_ref = np.zeros((i_max, len(concfg.input_terminals)));
+    contrast = np.zeros((i_max, len(concfg.input_terminals)));
+    
+    signals_x = data_raw[0:i_max,[i for i in range(0, expCfg.Nsamples*reads_per_cyc[0], reads_per_cyc[0])]]
+    references_x = data_raw[0:i_max,[i for i in range(1, expCfg.Nsamples*reads_per_cyc[0], reads_per_cyc[0])]]
+    mean_sig[:,0] = np.mean(signals_x,axis=1)
+    mean_ref[:,0] = np.mean(references_x,axis=1)
+    
+    contrast[:,0] = calc_contrast(mean_sig[:,0], mean_ref[:,0], 's/r')
+    
+    if len(concfg.input_terminals)>1:
+        signals_y = data_raw[0:i_max,[i for i in range(expCfg.Nsamples*reads_per_cyc[1], expCfg.Nsamples*reads_per_cyc[1]*2, reads_per_cyc[1])]]
+        references_y = data_raw[0:i_max,[i for i in range(expCfg.Nsamples*reads_per_cyc[1]+1, expCfg.Nsamples*reads_per_cyc[1]*2, reads_per_cyc[1])]]
+        mean_sig[:,1] = np.mean(signals_y,axis=1)
+        mean_ref[:,1] = np.mean(references_y,axis=1)
+        
+        contrast[:,1] = calc_contrast(mean_sig[:,1], mean_ref[:,1], 's/r')
     
     return [mean_sig, mean_ref, contrast]
 
@@ -326,16 +352,14 @@ def plot_data(i_max, param, processed_data, x_label, x_unit, live=False):
         plt.figure()
         plt.subplot(121)
         plt.plot([x/x_unit for x in xValues], mean_sig[0:i_max], '.-',[x/x_unit for x in xValues], mean_ref[0:i_max], '.-')
-        plt.legend(['Sig','Ref'])
+        plt.legend(['Sig X', 'Sig Y', 'Ref X', 'Ref Y']) if len(concfg.input_terminals)>1 else plt.legend(['Sig','Ref']) 
         plt.xlabel(x_label)
         plt.subplot(122)
-        plt.plot([x/x_unit for x in xValues],  contrast[0:i_max], '.-b')
-        # plt.xlabel(xlabel)
-        # plt.ylabel('Contrast')
+        plt.plot([x/x_unit for x in xValues],  contrast[0:i_max])
+        plt.xlabel(x_label);    plt.ylabel('Contrast')
+        plt.legend(['Contrast X', 'Contrast Y']) if len(concfg.input_terminals)>1 else plt.legend() 
         plt.title('Plotting %d points' %(i_max))
-    plt.xlabel(x_label)
-    plt.ylabel('Contrast')
-    
+
 # ----------------------------------------------------------------------------
 
 # if __name__ == '__main__':
@@ -343,9 +367,10 @@ def plot_data(i_max, param, processed_data, x_label, x_unit, live=False):
 
 expCfg = import_module(expCfgFile)
 # expCfg.N_scanPts = len(expCfg.scannedParam)
-clk_cyc = 1e3/conCfg.PBclk      # One clk cycle of PB = inverse of the clk freq of PB
+clk_cyc = 1e3/concfg.PBclk      # One clk cycle of PB = inverse of the clk freq of PB
 print('\x10 \x1b[38;2;250;250;0mRunning '+expCfg.saveFileName+' sequence\x1b[0m')
-SG = initialize_instr(expCfg.sequence)
+[SG] = initialize_instr(expCfg.sequence)
+
 seqctrl.check_params(expCfgFile)
 print("\x10 Parameter checks completed...")
 instr = 'diode'
@@ -357,20 +382,22 @@ instr = 'diode'
 # if trial_run == 'y':
 #     print("Cannot proceed further")
 
-[reads_per_cyc, Nsamples, data_write_format] = read_save_details(expCfg.sequence, len(conCfg.input_terminals), expCfg.Nsamples)
+[reads_per_cyc, Nsamples, data_write_format] = read_save_details(expCfg.sequence, len(concfg.input_terminals), expCfg.Nsamples)
 
 Nsamples = reads_per_cyc[0]*expCfg.Nsamples     # Nsamples is controlled by the no of apd signals i.e. reads_per_cyc[0] (even though 1 pd signal is saved, we have to acquire all, at the time when apd signal is acquired); this is sent to configure_DAQ
 
-display_parameters = dialog.yesno_box(expCfg.saveFileName+' Params', 'Channels\t: %s\nRuns\t: %g\nScanPts\t: %g\nSamples\t: %g\nStart\t: %g\nEnd\t: %g\nProceed ?' %(str(conCfg.input_terminals), expCfg.Nruns, Nscanpts, expCfg.Nsamples, param[0]/expCfg.plotXaxisUnits, param[-1]/expCfg.plotXaxisUnits))
-DAQclosed = True
+display_parameters = dialog.yesno_box(expCfg.saveFileName+' Params', 'Channels\t: %s\nRuns\t: %g\nScanPts\t: %g\nSamples\t: %g\nStart\t: %g\nEnd\t: %g\nProceed ?' %(str(concfg.input_terminals), expCfg.Nruns, Nscanpts, expCfg.Nsamples, param[0]/expCfg.plotXaxisUnits, param[-1]/expCfg.plotXaxisUnits))
+closed = False
 if display_parameters == 'yes':    
     try:
         # if trial_run == 'n':
+        ao_task = daqctrl.config_ao(dev="U9263")
+        daqctrl.start_ao(ao_task, daqctrl.coil_calibration(test_field))
         save_flag = False
-        PBctrl.run_sequence_for_diode(instructionList)        # Run the PB hardware
+        pbctrl.run_sequence_for_diode(instructionList)        # Run the PB hardware
         print("Initial Sequence Started...")
         # continue_run = 'yes'
-        DAQclosed = False;  DAQtask = DAQctrl.configure_daq(Nsamples)        # configure_daq() accepts no. of samples to read from DAQ-AI & returns the task created; variable 'readTask'
+        closed = False;  ai_task = daqctrl.config_ai(Nsamples)        # configure_daq() accepts no. of samples to read from DAQ-AI & returns the task created; variable 'readTask'
         print("\x10 DAQ configured for %d samples..." % expCfg.Nsamples)
         print('\x10 %d samples in each cycles...' % reads_per_cyc[0])
         
@@ -378,7 +405,7 @@ if display_parameters == 'yes':
         print("------Acquisition Started------")
         for i_run in range(0, expCfg.Nruns):
 
-            data_raw = np.zeros((Nscanpts,Nsamples))
+            data_raw = np.zeros((Nscanpts,Nsamples*len(concfg.input_terminals)))
             scan_time_list = []   # time (in seconds) for each scannedParam
             # print("\x10",i_run+1,'/',expCfg.Nruns)
             start_time = time.perf_counter()        # in seconds
@@ -386,7 +413,7 @@ if display_parameters == 'yes':
                 # if i_scanpt>0:
                 #     break
                 print(i_scanpt+1,' / ',Nscanpts,': ',param[i_scanpt])
-                [cts, scan_time] = acquire_data(Nsamples, param[i_scanpt], DAQtask, expCfg.sequence, seqArgList, trial_run)
+                [cts, scan_time] = acquire_data(Nsamples, param[i_scanpt], ai_task, expCfg.sequence, seqArgList, trial_run)
                 # in general for multi-channel acquisition, cts is a list of lists... this needs to be taken care
                 # the sig1,ref1,sig2,ref2,... order has not been changed cts and data_raw
                 data_raw[i_scanpt,:] = np.ravel(np.array(cts))
@@ -399,7 +426,7 @@ if display_parameters == 'yes':
                 #     break      
             end_time = time.perf_counter()          # in seconds
             exec_time = end_time - start_time       # in seconds
-            processed_data = process_data(i_scanpt, reads_per_cyc, data_raw)    # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
+            processed_data = process_data(i_scanpt+1, reads_per_cyc, data_raw)    # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
             plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel, expCfg.plotXaxisUnits, live=False)
             print("\x10 Execution time = %.2fs" % exec_time)        # in seconds
             print("\x10 Scan time = %.2fs" % (np.sum(scan_time_list)))   # in seconds
@@ -407,7 +434,7 @@ if display_parameters == 'yes':
             data_raw = np.insert(data_raw,0,param[0:i_scanpt+1],axis=1)     # insert the parameter value at the head of the array
 
             if i_run+1 == expCfg.Nruns: # Close all if this is the last run
-                DAQclosed = close_all(DAQclosed, DAQtask, SG) if trial_run[0] == 'n' and expCfg.sequence not in ['rodelay'] else close_all(DAQclosed, DAQtask)
+                closed = close_all(ai_task, SG, ao_task)
             savefile_yn = dialog.yesno_box('Data Saving',"Save data to file?")
             if savefile_yn == 'yes':
                 # Data file saving
@@ -438,16 +465,19 @@ if display_parameters == 'yes':
                 [paramfilename, datafilename, file_number] = prepare_for_saving(savePath)
             # A conditional save statement.. Different for dig_mod sequences...
             save_flag = save_data_txt_txt(datafilename, data_raw, data_write_format)
-        # save_data_txt(len(conCfg.input_terminals), datafilename, data_raw, data_write_format, expCfg.Nsamples, reads_per_cyc)
+        # save_data_txt(len(concfg.input_terminals), datafilename, data_raw, data_write_format, expCfg.Nsamples, reads_per_cyc)
     # else:        
     #     if (i_run+1)==expCfg.Nruns: # Save data of the final run here
-    #         save_data_txt(len(conCfg.input_terminals), datafilename, data_raw, data_write_format, expCfg.Nsamples, reads_per_cyc)
+    #         save_data_txt(len(concfg.input_terminals), datafilename, data_raw, data_write_format, expCfg.Nsamples, reads_per_cyc)
     finally:
-        DAQclosed = close_all(DAQclosed, DAQtask, SG) if trial_run[0] == 'n' and expCfg.sequence not in ['rodelay'] else close_all(DAQclosed, DAQtask)
+        if not closed:
+            closed = close_all(ai_task, SG, ao_task)
+        # close AMETEK
+         # amctrl.stop_oscillator(ametek)
         
         print("\x10 Read \x1b[38;2;250;150;50m%d*%d\x1b[0m samples at each pt." % (reads_per_cyc[0], expCfg.Nsamples))
         if save_flag:   # below line should "not" run if there was "no" save operation / data acquisition...
-            print("\x10 len(cts[0]) = \x1b[38;2;250;150;50m%d\x1b[0m" % len(cts[0])) if len(conCfg.input_terminals) == 2 else print("\x10 len(cts) = \x1b[38;2;250;150;50m%d\x1b[0m" % len(cts))
+            print("\x10 len(cts[0]) = \x1b[38;2;250;150;50m%d\x1b[0m" % len(cts[0])) if len(concfg.input_terminals) == 2 else print("\x10 len(cts) = \x1b[38;2;250;150;50m%d\x1b[0m" % len(cts))
         # Save parameters only if there was one save operation
         if save_flag:
             expParamList[1] = i_scanpt+1        # expParamList[1] -> value of N_scanPts
@@ -466,8 +496,10 @@ if display_parameters == 'yes':
         #     analysis = eng.ESR_raw_analysis()
         
 else:
-    print("Dialog closed...")
-    if trial_run[0] == 'n' and expCfg.sequence not in ['rodelay']:
-        close_all(DAQclosed, None, SG)
+    print("Measurement aborted...")
+    # if trial_run[0] == 'n' and expCfg.sequence not in ['rodelay']:
+    print(closed)
+    if not closed:
+        closed = close_all(None, SG, None)
     # sys.exit()
 # return instructionList

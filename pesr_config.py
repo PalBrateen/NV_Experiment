@@ -13,7 +13,7 @@ from SGcontrol import Hz, kHz, MHz, GHz
 from spinapi import ns,us,ms
 import numpy as np
 import os
-from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, conv_clk
+from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, camera, bx, by, bz
 # from time import localtime, strftime
 
 clk_cyc = 1e3/PBclk # Time resolution in ns
@@ -28,16 +28,16 @@ step_size = 1 * MHz
 N_scanPts = round((endfreq - startfreq)/step_size + 1)
 # N_scanPts = 1501              # Number of pulse length steps
 MW_power = 8          # Microwave power output from SRS(dBm)
-t_duration = 112 *ns         # Duration of pi-pulse
+t_duration = 132 *ns         # Duration of pi-pulse
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 5*us                    # AOM pulse duration (ns)
-ro_delay = (2500)*ns      # Readout delay (ns)
+t_AOM = 20 *us                    # AOM pulse duration (ns)
+ro_delay = (1800)*ns      # Readout delay (ns)
 # AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
-AOM_lag = (800)*ns
+AOM_lag = (800)*ns      # for camera
 MW_lag = 150*ns
 
-Nsamples = 5    # Number of signal frames to take at each scanpt
+Nsamples = 4    # Number of signal frames to take at each scanpt
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------
@@ -70,8 +70,9 @@ scannedParam = np.linspace(startfreq, endfreq, N_scanPts, endpoint=True)
 sequence = 'pesr_seq'       #Sequence string
 scanStartName = 'startfreq'        #Scan start Name
 scanEndName = 'endfreq'            #Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk, 'Samp\nCLK':samp_clk, 'MW':MW, 'Laser':laser,
-              'Start\nTrig':start_trig}
+PBchannels = {'Samp\nCLK':samp_clk, 'MW':MW, 'Laser':laser, 'Start\nTrig':start_trig}
+PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
+
 sequenceArgs = [t_AOM, ro_delay, AOM_lag, MW_lag, t_duration]      #Sequence args
 
 #Make save file path
