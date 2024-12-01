@@ -98,10 +98,12 @@ def PB_program(instr, sequence, sequenceArgs, err_check=False):
         return PB_program_camera(sequence, sequenceArgs, err_check)
     elif instr == 'cam_level1':
         return PB_program_camera_level_trigger_1(sequence, sequenceArgs, err_check)
-    elif instr == 'cam_levelm':
+    elif 'levelm' in instr:
         return PB_program_camera_level_trigger_many(sequence, sequenceArgs, err_check)
     elif instr == 'diode':
         return PB_program_diode(sequence, sequenceArgs, err_check)
+    elif 'timeseries' in instr:
+        return PB_program_diode(sequence, sequenceArgs, err_check)      # dummy return statement, required for program flow
 
 
 def PB_program_camera(sequence, sequenceArgs, err_check=False):
@@ -503,7 +505,7 @@ def run_sequence_for_camera(instructionList, t_exposure, t_seq_total, N_total):
     # # ebar sequence end kora hobe..
 
 
-def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_align, t_seq_total, N_total):
+def run_sequence_for_camera_level_trigger_many_dc(instructionList, t_exposure, t_align, t_seq_total, N_total):
     # t_seq_total should be a list: t_seq_total = [t_seq_tot_sig, t_seq_tot_ref]
     # print(instructionList)
     # instructionList               => len(instructionList)=2; PB instructions for 'signal' and 'reference' sequences
@@ -573,18 +575,26 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     #------------------------------------------------------------------------------------
 
     # part 1: aligning the propeller
-    DAQ_AO_CH = concfg.bx
+    DAQ_AO_CH = concfg.bx ^ concfg.by
     # DAQ_AO_test = concfg.by ^ concfg.bz
 
     pbchannels = concfg.bz #^ concfg.laser# ^ concfg.MW
     status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
     errorCatcher(status)
-    pbchannels = concfg.bx #^ concfg.laser# ^ concfg.MW
+    pbchannels = concfg.bx ^ concfg.by #^ concfg.laser# ^ concfg.MW
     status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
     errorCatcher(status)
+
+    # pbchannels = concfg.bz #^ concfg.laser# ^ concfg.MW
+    # status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
+    # errorCatcher(status)
     
     # print(pbchannels, Inst.CONTINUE, 0, t_align)
     start = [0]  # store the 'start' points of the sequence: 1st instruction and loop start points
+
+    pbchannels = 0 #^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, 10*ms);
+    errorCatcher(status)
 
     # part 2: camera exposure edge and subsequent delay
     # do we need laser here?
@@ -635,13 +645,25 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
         errorCatcher(start[1])
         # print(pbchannels, Inst.CONTINUE, 0, t_exposure[0])
 
-    # part 4: aligning the propeller:
-    pbchannels = concfg.bz #^ concfg.laser
-    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
-    errorCatcher(status)
-    # print(pbchannels, Inst.CONTINUE, 0, t_align)
-    pbchannels = concfg.bx #^ concfg.laser
-    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
+    # # part 4: aligning the propeller:
+    # pbchannels = concfg.bz #^ concfg.laser
+    # status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
+    # errorCatcher(status)
+    # # print(pbchannels, Inst.CONTINUE, 0, t_align)
+    # pbchannels = concfg.bx ^ concfg.by #^ concfg.laser
+    # status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_align/2);
+    # errorCatcher(status)
+
+    # # part 5: camera exposure edge and subsequent delay
+    # # do we need laser here?
+    # pbchannels = concfg.camera #^ concfg.laser
+    # status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_cam_response);
+    # errorCatcher(status)
+    # # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
+
+    # part 4: gap between frames
+    pbchannels = 0 #^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, 8*ms)
     errorCatcher(status)
 
     # part 5: camera exposure edge and subsequent delay
@@ -702,13 +724,575 @@ def run_sequence_for_camera_level_trigger_many(instructionList, t_exposure, t_al
     # return instructionList
     return [t_exposure, N]
 
-def run_only_daq(t_align):
+def run_sequence_for_camera_level_trigger_many_ac_level_trigger(instructionList, t_exposure, t_align, t_seq_total, N_total):
+    # t_seq_total should be a list: t_seq_total = [t_seq_tot_sig, t_seq_tot_ref]
+    # print(instructionList)
+    # instructionList               => len(instructionList)=2; PB instructions for 'signal' and 'reference' sequences
+    # instructionList[i]            => i=0: signal, i=1: reference
+    # instructionList[0][i]         => i=0: 1st instruction of the signal part, i=1: 2nd instruction...
+    # isntructionList[0][0][i]   => i=0: PBchannel number, i=1: Inst, i=2: Inst data, i=3: time (delay)
+    # t_exposure = 100 *ms
+    # configurePB()
+    # print("Loading PB...")
+    # print(t_exposure)
+    pb_reset()
+    status = pb_start_programming(PULSE_PROGRAM);
+    errorCatcher(status)
+
+    # -----------------------------korlam.. 24/05/2023-----------------------------
+    t_cam_response = 87.7 * us
+    t_jitter = 0 * us
+    # below are two lists, with 2 elements each, one for signal and other for reference...
+    # the operation should use np.floor() and not np.rint().. think..
+    if N_total == []:
+        # N_trigger = [int(np.floor((t_cam_response-t_jitter)/element)) for element in t_seq_total]
+        # N_total = [int(np.floor((t_exposure - t_cam_response - t_jitter)/element)) for element in t_seq_total]
+        # print(t_exposure)
+        N_total = [int(np.floor(t_exposure / element)) for element in t_seq_total]
+        # the total time is not t_exposure-t_cam_response but only t_exposure, the t_exposure need to be adjusted to
+        # t_exposure + 87.7us
+        
+        # print(N_total)
+        # need to check if (N_trigger + N_remaining) <= N_total) ??
+
+        # defining the buffer times (in nanoseconds) -  time when there will be no sequence running - quiet period
+        t_buffer = [t_exposure - N_t * t for (t, N_t) in zip(t_seq_total, N_total)]
+        # t_exposure is just for reference.. Ask camera for actual value.. this causes problems in the odmr sequence logic
+        # t_exposure = [(t_cam_response + N_total[i] * t_seq_total[i] + t_buffer[i]) for i in range(0, len(N_total))]  # this is in ns..
+        t_exposure = [t_exposure, t_exposure]
+        # print(t_exposure)
+        # print(N_total)
+
+    # -------------------------------------------------------------------------------------------
+    # -------------------------revisit this below------------------------------------------------
+    # -----this is the case when the sequence time varies by orders of magnitude and the exposure time needs to be modified to keep the exposure (number of photons collected) the same.....----------------
+    # ------------------this can also be used to do experiments with some fixed number of repetitions of 'normal' sequences-----------------------
+    else:
+        # change t_exposure keeping N_total constant
+        # this assignment is just for user to refer... The pulse sequence loop is controlled only by 'N'
+        t_exposure = [(t_cam_response + N_total[i] * t_seq_total[i]) for i in range(0, len(N_total))]  # this is in ns..
+        # print('this also runs!!!')
+        # print(t_exposure)
+        t_buffer = [0, 10*ns]
+
+    N = N_total
+
+    # print('N: ', N)
+    # print(f't_seq_total = {t_seq_total}')
+    # print(f't_buffer: {t_buffer}')
+    # print('t_exposure: ', t_exposure)
+    # print(f't_align = {t_align}')
+
+    #-----------------------------korlam.. 24/05/2023-----------------------------
+
+    signal_instruction = instructionList[0]
+    reference_instruction = instructionList[1]
+    # print(signal_instruction)
+    # print(reference_instruction)
+
+    # follow notebook for the details of the sequence...
+    #------------------------------------------------------------------------------------
+
+    # part 1: aligning the propeller
+    b_channels = concfg.bx ^ concfg.by ^ concfg.bz ^ concfg.start_trig
+    status = pb_inst_pbonly(b_channels, Inst.CONTINUE, 0, t_align);
+    errorCatcher(status)
+    # print(b_channels, Inst.CONTINUE, 0, t_align)
+
+    start = [0]  # store the 'start' points of the sequence: 1st instruction and loop start points
+
+    # part 2: camera exposure edge and subsequent delay
+    # do we need laser here?
+    pbchannels = concfg.camera #^ concfg.laser #^ concfg.MW
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_cam_response);
+    errorCatcher(status)
+    # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
+
+    # part 3: the SIGNAL sequence loop while camera exposure
+    instruction = signal_instruction
+    if N[0] >= 1:  # use the else case for ODMR!!!!!!!!!
+        started = False
+        for i in range(0, len(instruction) - 1):
+            # print(f'instruction[{i}]= {instruction[i]}')
+            if started:
+                # middle instructions...
+                pbchannels = instruction[i][0] ^ concfg.camera
+                status = pb_inst_pbonly(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3]);
+                errorCatcher(status)
+                # print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
+            else:
+                # first instruction.. with Inst.LOOP and repetitions N_trigger(_signal)[0]
+                # start[1]
+                pbchannels = instruction[0][0] ^ concfg.camera
+                start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, N[0], instruction[0][3]));
+                errorCatcher(start[1])
+                # print(pbchannels, Inst.LOOP, N[0], instruction[0][3])
+                started = True
+
+        # the last instruction.. with Inst.END_LOOP and start point (start[2])...
+        pbchannels = instruction[i + 1][0] ^ concfg.camera
+        status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3]);
+        errorCatcher(status)
+        # print(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3])
+
+        # the buffer comes here..
+        pbchannels = 0 ^ concfg.camera
+        status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else 0
+        errorCatcher(status)
+        # print(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else None
+
+    else:  # -------------check this out for normal ODMR!!!!!!--------------
+        pbchannels = concfg.camera ^ concfg.laser ^ concfg.MW
+        # start[1]
+        # there is no buffer in this case
+        # Exposure and laser happens for the same time
+        start.append(pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_exposure[0]));
+        errorCatcher(start[1])
+        # print(pbchannels, Inst.CONTINUE, 0, t_exposure[0])
+
+    # part 4: gap between frames
+    pbchannels = 0 #^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, 8*ms)
+    # print(pbchannels, Inst.CONTINUE, 0, 8*ms)
+    errorCatcher(status)
+
+    # part 5: camera exposure edge and subsequent delay
+    # do we need laser here?
+    pbchannels = concfg.camera #^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_cam_response);
+    errorCatcher(status)
+    # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
+
+    # part 6: the REFERENCE sequence loop while camera exposure
+    instruction = reference_instruction
+    if N[1] >= 1:  # use the else case for ODMR!!!!!!!!!
+        started = False
+        for i in range(0, len(instruction) - 1):
+            # print(f'instruction[{i}]= {instruction[i]}')
+            if started:
+                # middle instructions...
+                pbchannels = instruction[i][0] ^ concfg.camera
+                status = pb_inst_pbonly(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3]);
+                errorCatcher(status)
+                # print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
+            else:
+                # first instruction.. with Inst.LOOP and repetitions N_trigger(_signal)[0]
+                # start[2]
+                pbchannels = instruction[0][0] ^ concfg.camera
+                start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, N[1], instruction[0][3]));
+                errorCatcher(start[2])
+                # print(pbchannels, Inst.LOOP, N[1], instruction[0][3])
+                started = True
+
+        # the last instruction.. with Inst.END_LOOP and start point (start[2])...
+        pbchannels = instruction[i + 1][0] ^ concfg.camera
+        status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3]);
+        errorCatcher(status)
+        # print(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3])
+
+        # the buffer comes here..
+        # the last instruction with Inst.BRANCH... return the control to start[0] (the first instruction)
+        pbchannels = 0 ^ concfg.camera
+        status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, start[0], t_buffer[1]) if t_buffer[1] >= 10 else 0;
+        errorCatcher(status)
+        # print(pbchannels, Inst.BRANCH, start[0], t_buffer[1]) if t_buffer[1] >= 10 else 0
+
+    else:  # check this out for normal ODMR!!!!!!
+        pbchannels = concfg.camera ^ concfg.laser
+        # start[2]
+        start.append(pb_inst_pbonly(pbchannels, Inst.CONTINUE, start[0], t_exposure[1]));
+        errorCatcher(start[2])
+        # print(pbchannels, Inst.BRANCH, start[0], t_exposure[1])
+    pb_inst_pbonly(0, Inst.CONTINUE, 0, 14*ns)
+    pb_inst_pbonly(0, Inst.STOP, 0, 10*ns)
+    #---------------------------------------------DONE-------------------------------------------
+
+    status = pb_stop_programming();
+    errorCatcher(status)
+    status = pb_start();
+    errorCatcher(status)
+    # status = pb_close();                errorCatcher(status)
+    # print('\x1b[38;2;250;0;0m\x10 PB STARTED\x1b[0m')
+    # return instructionList
+    return [t_exposure, N]
+
+def run_sequence_for_camera_level_trigger_many_ac(instructionList, t_exposure, t_align, t_seq_total, N_total, Nsamples):
+    # t_seq_total should be a list: t_seq_total = [t_seq_tot_sig, t_seq_tot_ref]
+    # print(instructionList)
+    # instructionList               => len(instructionList)=2; PB instructions for 'signal' and 'reference' sequences
+    # instructionList[i]            => i=0: signal, i=1: reference
+    # instructionList[0][i]         => i=0: 1st instruction of the signal part, i=1: 2nd instruction...
+    # isntructionList[0][0][i]   => i=0: PBchannel number, i=1: Inst, i=2: Inst data, i=3: time (delay)
+    # t_exposure = 100 *ms
+    # configurePB()
+    # print("Loading PB...")
+    # print(t_exposure)
+    pb_reset()
+    status = pb_start_programming(PULSE_PROGRAM);
+    errorCatcher(status)
+
+    # -----------------------------korlam.. 24/05/2023-----------------------------
+    t_cam_response = 38.96 * us
+    t_jitter = 0 * us
+    # below are two lists, with 2 elements each, one for signal and other for reference...
+    # the operation should use np.floor() and not np.rint().. think..
+    if N_total == []:
+        # N_trigger = [int(np.floor((t_cam_response-t_jitter)/element)) for element in t_seq_total]
+        # N_total = [int(np.floor((t_exposure - t_cam_response - t_jitter)/element)) for element in t_seq_total]
+        # print(t_exposure)
+        N_total = [int(np.floor(t_exposure / element)) for element in t_seq_total]
+        # the total time is not t_exposure-t_cam_response but only t_exposure, the t_exposure need to be adjusted to
+        # t_exposure + 87.7us
+        
+        # print(N_total)
+        # need to check if (N_trigger + N_remaining) <= N_total) ??
+
+        # defining the buffer times (in nanoseconds) -  time when there will be no sequence running - quiet period
+        t_buffer = [t_exposure - N_t * t for (t, N_t) in zip(t_seq_total, N_total)]
+        # t_exposure is just for reference.. Ask camera for actual value.. this causes problems in the odmr sequence logic
+        # t_exposure = [(t_cam_response + N_total[i] * t_seq_total[i] + t_buffer[i]) for i in range(0, len(N_total))]  # this is in ns..
+        t_exposure = [t_exposure, t_exposure]
+        # print(t_exposure)
+        # print(N_total)
+
+    # -------------------------------------------------------------------------------------------
+    # -------------------------revisit this below------------------------------------------------
+    # -----this is the case when the sequence time varies by orders of magnitude and the exposure time needs to be modified to keep the exposure (number of photons collected) the same.....----------------
+    # ------------------this can also be used to do experiments with some fixed number of repetitions of 'normal' sequences-----------------------
+    else:
+        # change t_exposure keeping N_total constant
+        # this assignment is just for user to refer... The pulse sequence loop is controlled only by 'N'
+        t_exposure = [(t_cam_response + N_total[i] * t_seq_total[i]) for i in range(0, len(N_total))]  # this is in ns..
+        # print('this also runs!!!')
+        # print(t_exposure)
+        t_buffer = [0, 10*ns]
+
+    N = N_total
+
+    # print('N: ', N)
+    # print(f't_seq_total = {t_seq_total}')
+    # print(f't_buffer: {t_buffer}')
+    # print('t_exposure: ', t_exposure)
+    # print(f't_align = {t_align}')
+
+    #-----------------------------korlam.. 24/05/2023-----------------------------
+
+    signal_instruction = instructionList[0]
+    reference_instruction = instructionList[1]
+    # print(signal_instruction)
+    # print(reference_instruction)
+
+    # follow notebook for the details of the sequence...
+    #------------------------------------------------------------------------------------
+
+    # part 1: aligning the propeller
+    b_channels = concfg.bx ^ concfg.by ^ concfg.bz ^ concfg.start_trig
+    status = pb_inst_pbonly(b_channels, Inst.CONTINUE, 0, t_align);
+    errorCatcher(status)
+    # print(b_channels, Inst.CONTINUE, 0, t_align)
+    # consider the inductance of the coil and adjust the timescale
+    status = pb_inst_pbonly(0, Inst.CONTINUE, 0, 5*ms);
+    errorCatcher(status)
+    start = []  # store the 'start' points of the sequence: 1st instruction and loop start point
+
+    # part 2: camera exposure edge and subsequent delay
+    # do we need laser here?
+    pbchannels = concfg.camera ^ concfg.laser #^ concfg.MW
+    start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, Nsamples, t_cam_response))
+    errorCatcher(start[0])
+    # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
+
+    # part 3: the SIGNAL sequence loop while camera exposure
+    instruction = signal_instruction
+    if N[0] >= 1:  # use the else case for ODMR!!!!!!!!!
+        started = False
+        for i in range(0, len(instruction) - 1):
+            # print(f'instruction[{i}]= {instruction[i]}')
+            if started:
+                # middle instructions...
+                pbchannels = instruction[i][0]
+                status = pb_inst_pbonly(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3]);
+                errorCatcher(status)
+                # print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
+            else:
+                # first instruction.. with Inst.LOOP and repetitions N_trigger(_signal)[0]
+                # start[1]
+                pbchannels = instruction[0][0]
+                start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, N[0], instruction[0][3]));
+                errorCatcher(start[1])
+                # print(pbchannels, Inst.LOOP, N[0], instruction[0][3])
+                started = True
+
+        # the last instruction.. with Inst.END_LOOP and start point (start[2])...
+        pbchannels = instruction[i + 1][0]
+        status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3]);
+        errorCatcher(status)
+        # print(pbchannels, Inst.END_LOOP, start[1], instruction[i + 1][3])
+
+        # the buffer comes here..
+        pbchannels = 0
+        status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else 0
+        errorCatcher(status)
+        # print(pbchannels, Inst.CONTINUE, 0, t_buffer[0]) if t_buffer[0] >= 10 else None
+
+    else:  # -------------check this out for normal ODMR!!!!!!--------------
+        pbchannels = concfg.laser ^ concfg.MW
+        # start[1]
+        # there is no buffer in this case
+        # Exposure and laser happens for the same time
+        start.append(pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_exposure[0]));
+        errorCatcher(start[1])
+        # print(pbchannels, Inst.CONTINUE, 0, t_exposure[0])
+
+    # part 5: camera exposure edge and subsequent delay
+    # do we need laser here?
+    pbchannels = concfg.camera ^ concfg.laser
+    status = pb_inst_pbonly(pbchannels, Inst.CONTINUE, 0, t_cam_response);
+    errorCatcher(status)
+    # print(pbchannels, Inst.CONTINUE, 0, t_cam_response)
+
+    # part 6: the REFERENCE sequence loop while camera exposure
+    instruction = reference_instruction
+    if N[1] >= 1:  # use the else case for ODMR!!!!!!!!!
+        started = False
+        for i in range(0, len(instruction) - 1):
+            # print(f'instruction[{i}]= {instruction[i]}')
+            if started:
+                # middle instructions...
+                pbchannels = instruction[i][0]
+                status = pb_inst_pbonly(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3]);
+                errorCatcher(status)
+                # print(pbchannels, instruction[i][1], instruction[i][2], instruction[i][3])
+            else:
+                # first instruction.. with Inst.LOOP and repetitions N_trigger(_signal)[0]
+                # start[2]
+                pbchannels = instruction[0][0]
+                start.append(pb_inst_pbonly(pbchannels, Inst.LOOP, N[1], instruction[0][3]));
+                errorCatcher(start[2])
+                # print(pbchannels, Inst.LOOP, N[1], instruction[0][3])
+                started = True
+
+        # the last instruction.. with Inst.END_LOOP and start point (start[2])...
+        pbchannels = instruction[i + 1][0]
+        status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3]);
+        errorCatcher(status)
+        # print(pbchannels, Inst.END_LOOP, start[2], instruction[i + 1][3])
+
+        # the buffer comes here..
+        # the last instruction with Inst.BRANCH... return the control to start[0] (the first instruction)
+        pbchannels = 0
+        status = pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[0], t_buffer[1]) if t_buffer[1] >= 10 else 0;
+        errorCatcher(status)
+        # print(pbchannels, Inst.BRANCH, start[0], t_buffer[1]) if t_buffer[1] >= 10 else 0
+
+    else:  # check this out for normal ODMR!!!!!!
+        pbchannels = concfg.laser
+        # start[2]
+        start.append(pb_inst_pbonly(pbchannels, Inst.END_LOOP, start[0], t_exposure[1]));
+        errorCatcher(start[2])
+        # print(pbchannels, Inst.BRANCH, start[0], t_exposure[1])
+    pb_inst_pbonly(concfg.camera ^ concfg.laser, Inst.CONTINUE, 0, 14*ns)
+    pb_inst_pbonly(concfg.laser, Inst.STOP, 0, 10*ns)
+    #---------------------------------------------DONE-------------------------------------------
+
+    status = pb_stop_programming();
+    errorCatcher(status)
+    status = pb_start();
+    errorCatcher(status)
+    # status = pb_close();                errorCatcher(status)
+    # print('\x1b[38;2;250;0;0m\x10 PB STARTED\x1b[0m')
+    # return instructionList
+    return [t_exposure, N]
+
+def run_only_daq(t_align):      # incoming t_align in ms
     ### Run this function to keep the manipulation ON during scanpt change
-    # DAQ_AO_CH = concfg.bx
-    instructionList = [[concfg.bz, Inst.CONTINUE, 0, t_align/2],
-                    [concfg.bx, Inst.BRANCH, 0, t_align/2]]
+    # DAQ_AO_CH = concfg.bx ^ concfg.by
+    if t_align < 50*ms:
+        instructionList = [[concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, t_align/2],
+                        [concfg.bx ^ concfg.by, Inst.BRANCH, 0, t_align/2]]
+    else:
+        # t_align is already in ns
+        duty = 0.07
+        x = int(duty*t_align/(1-duty)/10)*10       # in ms
+        # print(x)
+        instructionList = [[concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, x],
+                        [concfg.bz, Inst.CONTINUE, 0, (t_align/2 - x)],
+                        [concfg.bx ^ concfg.by, Inst.BRANCH, 0, t_align/2]]
     run_sequence_for_diode([instructionList])
 
+def custom_trigger(t_exposure, t_align):
+    # instructionList, t_exposure, t_align, t_seq_total, N_total
+    # t_exposure = 5 *ms
+    # t_field = 125 *ms
+    # t_cam_response = 38.96 *us
+    
+    print(f"t_exposure = {t_exposure}")
+    print(f"t_align = {t_align}")
+    t_field = t_align/2
+    trigger_width = 1 *ms
+    t_total = 2000 *ms
+    start = []
+
+    pb_reset()
+    status = pb_start_programming(PULSE_PROGRAM);    errorCatcher(status)
+
+    number_of_frames = int(int(t_field/t_exposure)/2)
+    print(number_of_frames)
+    # first the Bz part
+    start.append(pb_inst_pbonly(concfg.camera ^ concfg.bz ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width));    errorCatcher(start[0])
+    status = pb_inst_pbonly(concfg.bz ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.camera ^ concfg.bz ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.bz ^ concfg.MW ^ concfg.laser, Inst.END_LOOP, start[0], (t_exposure-trigger_width));    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.camera ^ concfg.bz ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.bz ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    # next the Bx part
+    start.append(pb_inst_pbonly(concfg.camera ^ concfg.bx ^ concfg.MW ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width));    errorCatcher(start[1])
+    status = pb_inst_pbonly(concfg.bx ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.camera ^ concfg.bx ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.bx ^ concfg.laser, Inst.END_LOOP, start[1], (t_exposure-trigger_width));    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.camera ^ concfg.bx ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.bx ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    # remaining part without field
+    number_of_frames = int(int(t_total/t_exposure)/2)
+    print(number_of_frames)
+    start.append(pb_inst_pbonly(concfg.camera ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width));    errorCatcher(start[2])
+    status = pb_inst_pbonly(0 ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.camera ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    status = pb_inst_pbonly(0 ^ concfg.MW ^ concfg.laser, Inst.END_LOOP, start[2], (t_exposure-trigger_width));    errorCatcher(status)
+
+    # status = pb_inst_pbonly(0 ^ concfg.laser, Inst.BRANCH, start[2], 100 *ns);    errorCatcher(status)
+
+    status = pb_stop_programming();    errorCatcher(status)
+    status = pb_start();    errorCatcher(status)
+
+def custom_trigger_rot_field(t_exposure, t_align, t_meas, t_align_extended):
+    # t_exposure is the exposure time returned by camera
+    # t_align is the extended rotating field pattern time determined by the pattern, t_align_rot_extended in main program
+    # t_meas is the measurement time ~100 ms
+    # t_exposure = 5 *ms
+    # t_field = 125 *ms
+    # t_cam_response = 38.96 *us
+    print(f"Target measurement time = {t_meas} ns")
+    print(f"t_exposure = {t_exposure} ns")
+    print(f"t_align = {t_align} ns")
+
+    t_field = t_align       # the field channels are kept open for the whole time of t_align
+    trigger_width = 100 *us
+    start = []
+    b_channels = concfg.bx ^ concfg.by ^ concfg.bz ^ concfg.start_trig      # open/close all PB channels for rotating field aignment
+
+    pb_reset()
+    status = pb_start_programming(PULSE_PROGRAM);    errorCatcher(status)
+
+    number_of_frames = int(np.ceil(np.ceil(t_field/t_exposure)/2))       # (number of frames)/2 during the field ON time
+    print(f"{number_of_frames*2} in field ON time")
+    # print(concfg.camera ^ b_channels ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width)
+    start.append(pb_inst_pbonly(concfg.camera ^ b_channels ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width));    errorCatcher(start[0])
+    status = pb_inst_pbonly(b_channels ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    # print(b_channels ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width))
+    status = pb_inst_pbonly(concfg.camera ^ b_channels ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    # print(concfg.camera ^ b_channels ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width)
+    status = pb_inst_pbonly(b_channels ^ concfg.MW ^ concfg.laser, Inst.END_LOOP, start[0], (t_exposure-trigger_width));    errorCatcher(status)
+    # print(b_channels ^ concfg.MW ^ concfg.laser, Inst.END_LOOP, start[0], (t_exposure-trigger_width))
+    # status = pb_inst_pbonly(concfg.camera ^ b_channels ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    # status = pb_inst_pbonly(b_channels ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+
+    # start.append(pb_inst_pbonly(concfg.camera ^ b_channels ^ concfg.MW ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width));    errorCatcher(start[1])
+    # status = pb_inst_pbonly(b_channels ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    # status = pb_inst_pbonly(concfg.camera ^ b_channels ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    # status = pb_inst_pbonly(b_channels ^ concfg.laser, Inst.END_LOOP, start[1], (t_exposure-trigger_width));    errorCatcher(status)
+    # status = pb_inst_pbonly(concfg.camera ^ b_channels ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    # status = pb_inst_pbonly(b_channels ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+
+    # number_of_frames = int(np.ceil(np.ceil((t_meas-t_field)/t_exposure)/2))     # (number of frames)/2 during field OFF time
+    # print(f"{number_of_frames*2} in field OFF time ideally")
+    # if (t_meas - t_align_extended) > 0:
+
+    t_meas_modified = t_meas-(t_align_extended-t_align)
+    print(f"t_align extended = {t_align_extended} ns")
+    print(f"Modified t_meas = {t_meas_modified}")
+    number_of_frames = int(np.ceil(np.ceil(t_meas_modified/t_exposure)/2))
+    print(f"{number_of_frames*2} in field OFF time")
+    start.append(pb_inst_pbonly(concfg.camera ^ concfg.laser, Inst.CONTINUE, number_of_frames, trigger_width));    errorCatcher(start[1])
+    status = pb_inst_pbonly(0 ^ concfg.laser, Inst.CONTINUE, 0, (t_exposure-trigger_width));    errorCatcher(status)
+    status = pb_inst_pbonly(concfg.camera ^ concfg.MW ^ concfg.laser, Inst.CONTINUE, 0, trigger_width);    errorCatcher(status)
+    status = pb_inst_pbonly(0 ^ concfg.MW ^ concfg.laser, Inst.BRANCH, start[1], (t_exposure-trigger_width));    errorCatcher(status)
+
+    # status = pb_inst_pbonly(0 ^ concfg.laser, Inst.BRANCH, start[2], 100 *ns);    errorCatcher(status)
+
+    status = pb_stop_programming();    errorCatcher(status)
+    status = pb_start();    errorCatcher(status)
+
+def custom_trigger_rot_field_continuous(t_exposure, t_align, t_meas, t_align_extended):
+    # t_exposure is the exposure time returned by camera
+    # t_align is the extended rotating field pattern time determined by the pattern, t_align_rot_extended in main program
+    # t_meas is the total measurement time ~100 ms
+    # t_exposure = 5 *ms
+    # t_field = 125 *ms
+    # t_cam_response = 38.96 *us
+    print(f"Target measurement time = {t_meas} ns")
+    print(f"t_exposure = {t_exposure} ns")
+    print(f"t_align_rot = {t_align} ns")
+    t_field = t_align       # the field channels are kept open for the whole time of t_align
+    t_meas_modified = t_meas-(t_align_extended-t_align)
+    print(f"t_align extended = {t_align_extended} ns")
+    print(f"Modified t_meas = {t_meas_modified}")
+
+    trigger_width = 1 *ms
+    start = []
+    b_channels = concfg.bx ^ concfg.by ^ concfg.bz ^ concfg.start_trig      # open/close all PB channels for rotating field aignment
+    b_channels_only = concfg.bx ^ concfg.by ^ concfg.bz
+    pb_reset()
+    status = pb_start_programming(PULSE_PROGRAM);    errorCatcher(status)
+
+    number_of_frames = int(np.ceil(np.ceil(t_field/t_exposure)/2))       # (number of frames)/2 during the field ON time
+    print(f"{number_of_frames*2} in field ON time")
+
+    # print(b_channels ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width)
+    start.append(pb_inst_pbonly(b_channels ^ concfg.laser, Inst.CONTINUE, 0, t_field));    errorCatcher(start[0])
+    status = pb_inst_pbonly(b_channels_only ^ concfg.laser, Inst.BRANCH, 0, t_meas_modified);    errorCatcher(status)
+
+    status = pb_stop_programming();    errorCatcher(status)
+    status = pb_start();    errorCatcher(status)
+
+def custom_trigger_rot_field_continuous_uncorrected(t_exposure, t_align, t_meas, t_align_extended):
+    # t_exposure is the exposure time returned by camera
+    # t_align is the extended rotating field pattern time determined by the pattern, t_align_rot_extended in main program
+    # t_meas is the total measurement time ~100 ms
+    # t_exposure = 5 *ms
+    # t_field = 125 *ms
+    # t_cam_response = 38.96 *us
+    print(f"Target measurement time = {t_meas} ns")
+    print(f"t_exposure = {t_exposure} ns")
+    print(f"t_align_rot = {t_align} ns")
+    t_field = t_align       # the field channels are kept open for the whole time of t_align
+    t_meas_modified = t_meas-(t_align_extended-t_align)
+    print(f"t_align extended = {t_align_extended} ns")
+    print(f"Modified t_meas = {t_meas_modified}")
+
+    if t_meas_modified<0:
+        n_frames_rot_alignment = np.floor(t_align/t_exposure)      # UNITS???? t_exposure is seconds, and t_align_rot is in seconds (calculated from dt in seconds)
+        t_align_extended = n_frames_rot_alignment*t_exposure       # extended/modified t_align_rot to fit even number of frames (signals and references)
+        t_meas_modified = t_meas+(t_align-t_align_extended)
+        print(f"t_align extended adjusted = {t_align_extended} ns")
+        print(f"Modified t_meas = {t_meas_modified}")
+
+    trigger_width = 1 *ms
+    start = []
+    b_channels = concfg.bx ^ concfg.by ^ concfg.bz ^ concfg.start_trig      # open/close all PB channels for rotating field aignment
+    b_channels_only = concfg.bx ^ concfg.by ^ concfg.bz
+    pb_reset()
+    status = pb_start_programming(PULSE_PROGRAM);    errorCatcher(status)
+
+    number_of_frames = int(np.ceil(np.ceil(t_field/t_exposure)/2))       # (number of frames)/2 during the field ON time
+    print(f"{number_of_frames*2} in field ON time")
+
+    # print(b_channels ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width)
+    start.append(pb_inst_pbonly(b_channels ^ concfg.laser, Inst.CONTINUE, 0, t_field));    errorCatcher(start[0])
+    status = pb_inst_pbonly(b_channels_only ^ concfg.laser, Inst.BRANCH, 0, t_meas_modified);    errorCatcher(status)
+
+    status = pb_stop_programming();    errorCatcher(status)
+    status = pb_start();    errorCatcher(status)
 #%%
 if __name__ == '__main__':
     configurePB()
