@@ -1,21 +1,24 @@
 # mainControl_camera -v2.0
 # Initialization and Definition
-# reset
-import Camcontrol as camctrl, PBcontrol_v2 as pbctrl, sequencecontrol as seqctrl, SGcontrol as sgctrl, \
-    connectionConfig as concfg, matplotlib.pyplot as plt, numpy as np, sys, time, dialog, cv2, os, skimage as sk, \
-    tifffile as tifff, DAQcontrol as daqctrl, threading, logging
-from spinapi import ns, us, ms, Inst
+# %reset
+import  connectionConfig as concfg, matplotlib.pyplot as plt, numpy as np, sys, time, dialog, cv2, os, \
+    tifffile as tifff, threading, logging, dcamcon
+from PyQt5.QtWidgets import QApplication
+from sequencecontrol import sequencecontrol
+from SGcontrol import SignalGenerator
+from Camcontrol import CameraThread, CameraWorker, InputApp
+from PBcontrol import PulseBlaster, ns, ms, us, s, Inst
+from DAQcontrol import DAQ_write_pattern, AnalogOutputTask
+# from spinapi import ns, us, ms, Inst
 from os.path import isdir, isfile;
 from importlib import import_module
-import dcam,  warnings, matplotlib
+import dcam, warnings, matplotlib
+from queue import Queue, Empty
 # from matlab import engine as eng
 # %matplotlib qt5
+plt.rcParams.update({'figure.max_open_warning': 0})
 
-global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, SG, expCfg, f_number, hdcamcon, instr, data#, data_raw_time
-
-# def main():
-# print("\x10 \x1b[0mImports Successful...")
-plt.rcParams.update({'figure.max_open_warning': 0})  # No warnings on opening mult fig windows
+global expCfgFile, trial_run, seq_no_plot, voltage_unit, seq_plot_dpi, plotPulseSequence, clk_cyc, sg, expCfg, f_number, hdcamcon, instr, data, pb, ao_task, camera_worker#, data_raw_time
 
 instr = 'cam_levelm_trigger_ao'
 # options: cam, cam_level1, cam_levelm, cam_timeseries, cam_timeseries_trigger_ao, cam_levelm_trigger_ao
@@ -23,23 +26,24 @@ expCfgFile = 'esr' + '_config'
 N_total = [2, 2]  # a 2-element list (sig and ref) for total number of repetitions.. if empty then N_total is allowed to change for each scanpt..
 # N_total = [] #if expCfgFile == 'esr_config' else [12354,12354]
 
-trial_run = ['n', 'n']  # 1st = SG, 2nd = camera
+trial_run = ['n', 'n']  # 1st = sg, 2nd = camera
 # all times here are in seconds
 fps = 996.3
 rot_field_amp = 50      # field amplitude in [gauss]
-rot_field_freq = 29     # field frequency [Hz]
+rot_field_freq = 20     # field frequency [Hz]
 
 direction = 'z'
-rot_angle = 45      # rotation angle in degrees
+rot_angle = 60      # rotation angle in degrees
 t_meas = 50        # measurement time [ms] for cam_timeseries_trigger_ao only
 
-t_exposure = 3     # exposure [ms]; set to 5 ms for 'timeseries' measurements
+t_exposure = 10     # exposure [ms]; set to 5 ms for 'timeseries' measurements
 t_align_dc = 250         # [ms]; set to 250 ms for 'timeseries' mmesurements
 align_field = [ 50 , 0, +50 ]          # [bx] G
 # align_field = [ 0 , 0 , 0 ]
-# test_field = [15, 15]        # [by, bz] G
-# test_field = [0, 0]
 
+test_field = [0, 0, 0]        # [bx, by, bz] G
+# test_field = [0, 0, 0]
+min_focus_time = 5      # [s]
 
 # cam_timeseries_trigger_ao: take the timeseries measurement at 5ms exposure time for some time interval after performing the 3x(Bz, Bx) + fractional rotating field alignment
 # cam_levelm_trigger_ao: perform ODMR with triggered rotating field for diffusion control with level triggered camnera acquisition
@@ -52,76 +56,133 @@ plotPulseSequence = False
 livePlotUpdate = False
 ao_task = None
 
+seqctrl = sequencecontrol()
 def initialize_instr(sequence):
-    global hdcamcon
-    try:
-        pbctrl.pb_close()
-        pbctrl.configurePB()
-        print(
-            '\x10 PB: \x1b[38;2;250;250;0mv' + pbctrl.pb_get_version() + '\x1b[0m')  # Display the PB board version using pb_get_version()
-    except:
-        print("Error Initializing PB !!")
-    # finally:
-    #     sys.exit()
+    global hdcamcon, pb, ao_task, camera_worker, sg
+
+    pb = PulseBlaster()              # pb not configured in __init__()
+    pb.configure()
+    ao_task = AnalogOutputTask()    # AO alreay configured here in __init__()
+    
     if trial_run[0] == 'n' and sequence not in ['aom_timing', 'rodelay']:
-        # Do not initialize SG if it is a trial run or the sequence is present in the list ['aom_timing', 'rodelay']
-        SG = sgctrl.init_sg(concfg.serialaddr,concfg.model_name)
-        if SG != '':
-            sgctrl.enable_SG_op();
+        # Do not initialize sg if it is a trial run or the sequence is present in the list ['aom_timing', 'rodelay']
+        sg = SignalGenerator()
+        if sg != '':
+            sg.enable_sg_output();
             print("SG Output Enabled...")
-            sgctrl.set_SG_amp(expCfg.MW_power)
-            SG.write("freq2.87ghz")
-            sgctrl.setup_SG_pulse_mod();
+            sg.set_sg_amp(expCfg.MW_power)
+            sg.set_sg_freq(2.87e9)
+            sg.setup_sg_pulse_mod();
             print("SG Ext Pulse Mod Enabled...")
     else:
-        SG = None
-    hdcamcon = camctrl.init_cam() if trial_run[1] == 'n' else None
-    return [SG, hdcamcon]
+        sg = None
+    if trial_run[1] == 'n':
+        camera_worker = CameraWorker()
+        camera_worker.init_cam()
+        hdcamcon = camera_worker.hdcamcon
+        if instr in ['cam_level1', 'cam_levelm']:
+            camera_worker.triggeractive = dcamcon.DCAMPROP.TRIGGERACTIVE.LEVEL
+        else:
+            camera_worker.triggeractive = dcamcon.DCAMPROP.TRIGGERACTIVE.SYNCREADOUT
+        hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERACTIVE, val=camera_worker.triggeractive)
+    else:
+        hdcamcon = None
+    return [sg, ao_task, hdcamcon]
 
 
-def close_all(SG, hdcamcon, ao_task):
+def close_all(sg, hdcamcon, ao_task):
     """End the measurement
     Closes all the instruments.
     """
     if (trial_run[1] == 'n') and (hdcamcon is not None):
         # stops capture, releases buffer, closes camera and uninitializes DCAM-API
-        camctrl.uninit_cam()
+        camera_worker.uninit_cam()
         # print("\x1b[38;2;10;250;50mCamera Closed...")
 
     if (ao_task is not None):
-        daqctrl.set_outputs_to_constant(ao_task, [0,0,0])
-        daqctrl.close_daq_task(ao_task)
+        print(f"AO closing:: status: {ao_task.task_state}")
+        ao_task.set_outputs_to_constant([0,0,0])
+        time.sleep(0.5)
+        ao_task.__del__()
         print('AO stopped...')
     
-    if (trial_run[0] == 'n') and (SG is not None):
-        SG.write('freq2.87ghz')
-        # sgctrl.disable_SG_op()
-        sgctrl.uninit_sg()
+    if (trial_run[0] == 'n') and (sg is not None):
+        sg.set_sg_freq(2.87e9)
+        # sg.disable_sg_output()
+        sg.uninit_sg()
 
-    # pbctrl.pb_init();
-    if t_align_dc < 50:
-        pbctrl.run_only_daq(250 *ms)        # let t_align_dc=250
-    else:
-        pbctrl.run_only_daq(t_align_dc *ms)
+    # pb.pb_init();
+    # if t_align_dc < 50:
+    #     pb.run_only_daq(250 *ms)        # let t_align_dc=250
+    # else:
+    #     pb.run_only_daq(t_align_dc *ms)
     closed = True
-    # pbctrl.pb_stop();
-    pbctrl.pb_close();
+    # pb.pb_stop();
+    pb.closePB();
     print("Pulse Blaster closed...\x1b[0m")
     return True
+
+def measurement_to_focus(t_exposure, t_rot_alignment):
+    """Necessary operations to transition from measurement state to focusing state
+    """
+
+    # PB settings
+    pb.focus_adjustment_sequence(t_exposure=t_exposure, t_align=t_rot_alignment)
+    # while camera_worker.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+    #     pb.start_sequence()
+    #     time.sleep(pb.min_focus_time/s)
+    #     pb.stop_sequence()
+
+    # camera settings
+    camera_worker.trigger_mode = dcamcon.DCAMPROP.TRIGGERSOURCE.INTERNAL
+    camera_worker.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.TRIGGERSOURCE, camera_worker.trigger_mode)
+
+    # # DAQ AO settings
+    # ao_task.set_outputs_to_constant(align_field)
+
+def focus_to_measurement():
+    """Necessary operations to transition from focusing state to measurement state
+    """
+    # camera settings
+    camera_worker.configure_camera()
+
+    # # DAQ AO settings
+    # ao_task.create_retriggerable_ao_task(data_shape)
+    # ao_task.start_retirggerable_ao_task(patern_data)
+
+    # PB settings
+    None
+
+def focus_adjustment(t_exposure, t_rot_alignment):
+    # transit from measurement to focus
+    measurement_to_focus(t_exposure, t_rot_alignment)
+
+    # start focusing
+    print(f"Before adjustment.. {camera_worker.query_camera_status()}")
+    camera_worker.start_capture()
+    print(f"After adjustment.. {camera_worker.query_camera_status()}")
+
+    # while camera_worker.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+    #     pass
+
+    # camera_worker.stop_capture()
+    focus_to_measurement()
 
 
 def initialize_exp(instr, expCfg):
     """Initialize the experimental parameters and check whether the sequence can be sent to the PB...
     Also, start the initial PB sequence.
-    Returns: 
-    param_save_format - contains the save format of the parameters in the parmater file
-    savePath          -
-    seqArgList        - 
-    expParamList      -
-    Nscanpts          -
-    param             -
-    instructionList   - 
-    Include trial run check so that the error plots are only displayed when it is not a trial run
+
+    Returns:
+    -------
+        param_save_format - contains the save format of the parameters in the parmater file
+        savePath          -
+        seqArgList        - 
+        expParamList      -
+        Nscanpts          -
+        param             -
+        instructionList   - 
+        Include trial run check so that the error plots are only displayed when it is not a trial run
     """
 
     param = expCfg.scannedParam
@@ -172,7 +233,7 @@ def initialize_exp(instr, expCfg):
     print("Starting Initial Sequence...")
     if trial_run[0] == 'n' or trial_run[1] == 'n':
         # instructionList = [start_initial_PB_seq()]
-        # pbctrl.run_sequence_for_diode(instructionList)
+        # pb.run_sequence_for_diode(instructionList)
         if t_align_dc < 50:
             instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, t_align_dc*ms/2],
                             [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, t_align_dc*ms/2]]
@@ -183,11 +244,11 @@ def initialize_exp(instr, expCfg):
             instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, x],
                             [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (t_align_dc*ms/2 - x)],
                             [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, t_align_dc*ms/2]]
-        pbctrl.run_sequence_for_diode([instructionList])
+        pb.run_sequence_for_diode([instructionList])
                 
         print("\x1b[38;2;50;250;50m----------PB Running----------\x1b[0m")
         if expCfg.sequence not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq', 'aom_timing', 'rodelay', 'timeseries_seq'] and trial_run[0] == 'n':
-            sgctrl.set_SG_freq(expCfg.MW_freq)
+            sg.set_sg_freq(expCfg.MW_freq)
     else:
         print("\x1b[38;2;250;250;0m----------PB NOT Running----------\x1b[0m")
 
@@ -221,8 +282,9 @@ def initialize_exp(instr, expCfg):
         if not (isdir(savePath)):
             os.makedirs(savePath)
     
-    roi = [1228, 1344, 88, 52]
-    roi = []
+    roi = [968, 752, 644, 808]      # region of laser spot
+    roi = [1060, 1040, 444, 408]
+    # roi = []
     
     # viewing live image and adjust the exposure time
     if trial_run[1] == 'n' and hdcamcon is not None:
@@ -230,22 +292,31 @@ def initialize_exp(instr, expCfg):
         # manage the duty cycle of MW
         instructionList = [[pbchannels ^ concfg.MW, Inst.CONTINUE, 0, 40 * ms],
                        [pbchannels, Inst.BRANCH, 0, 600 * ms]]
-        pbctrl.run_sequence_for_diode([instructionList])
-        ao_task = daqctrl.config_ao(dev='P6363')
+        pb.run_sequence_for_diode([instructionList])
+        # ao_task = daqctrl.config_ao(dev='P6363')
         
-        from_liveframes = camctrl.live_frames(ao_task, roi=roi, exposure=t_exposure, t_align=t_align_dc, field=align_field, running=False)
-        pbctrl.run_only_daq(t_align_dc *ms)
+        app = QApplication(sys.argv)
+        camera_app = InputApp(ao_task, camera_worker, roi, t_exposure, t_align_dc, align_field)
+        camera_app.show()
+        exit_code = app.exec_()
+
+        # from_liveframes = camera_worker.live_frames(ao_task, roi=roi, exposure=t_exposure, t_align=t_align_dc, field=align_field, running=False)
+        from_liveframes = [camera_worker.exposure, camera_app.align_field, camera_worker.last_frame]
+        # [camera_worker_obj.exposure, camera_worker_obj.align_voltage, camera_worker_obj.align_field, camera_worker_obj.last_frame]
+        pb.run_only_daq(t_align_dc *ms)
     else:
-        from_liveframes = [None, None, None, None, None, None]
-    # now select the ROI
-    if roi == [] and trial_run[1] == 'n':
-        roi = camctrl.select_roi(data=from_liveframes[-1], roi=roi) if (trial_run[1] == 'n' and hdcamcon is not None) else None
+        from_liveframes = [None, None, None]
+    # now select the ROI -- -- -- --> now inside camera_worker
+    # if roi == [] and trial_run[1] == 'n':
+    #     roi = camera_worker.select_roi(data=from_liveframes[-1], roi=roi) if (trial_run[1] == 'n' and hdcamcon is not None) else None
+    if trial_run[1] == 'n':
+        roi = camera_worker.roi
 
     # stop the initial PB sequence after initializing the parameters
-    # status = pbctrl.pb_stop()
-    # pbctrl.errorCatcher(status)
+    # status = pb.pb_stop()
+    # pb.errorCatcher(status)
     # instead of stopping PB, run the manipulation fields
-    pbctrl.run_only_daq(t_align_dc *ms)
+    pb.run_only_daq(t_align_dc *ms)
     
     # something wrong in the return statement, if and else both returns the same parameters!!!!!!!!!!!
     return [from_liveframes, roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList] #if trial_run[1] == 'n' else [roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList]
@@ -350,7 +421,7 @@ def view_sequence(sequence, PBchannels, seqArgList, only_plot=False, parameter=[
                 # expCfg.t_AOM = t_AOM
                 seqArgList[0] = parameter[seq_no_plot[i]]
         plt.figure(num=f"{sequence} sequence plot", dpi = plot_dpi)
-        the_list = pbctrl.PB_program(instr, sequence, seqArgList)
+        the_list = pb.PB_program(instr, sequence, seqArgList)
         for j in range(0, len(the_list)):
             instructionList = the_list[j][0]
             inst_times = the_list[j][4]
@@ -378,27 +449,23 @@ def acquire_data(trigger_event, condition, roi, Nsamples, Nscanpts, i_run):
     scan_time_list = []  # time (in seconds) for each scannedParam
     global trial_run, data#, data_raw_time
 
-    timeout_ms = 100000  # revisit...
+    timeout_ms = 1000  # revisit...
 
     if trial_run[1] == 'n':
 
         for i_scanpt_cam in range(0, Nscanpts):
 
             trigger_event.wait()        # waiting for trigger to be set...
-
-            # if i_scanpt_cam > 0:
-            #     break
-            
-            # print('Starting wait_capevent_frameready...')
+            pb.start_sequence()
             t1 = time.perf_counter()
-            # result = False 
             result = hdcamcon.wait_capevent_frameready(timeout_ms)
 
             timeout_happened = 0
             while result is not True:
+                print("Timeout...")
             # if (result) is not True:
                 # frame does not come
-                if result != camctrl.dcamcon.DCAMERR.TIMEOUT:  # note the != comparison
+                if result != dcamcon.DCAMERR.TIMEOUT:  # note the != comparison
                     print('-NG: Dcam.wait_event() failed with error {}'.format(result))
                     break
 
@@ -406,7 +473,7 @@ def acquire_data(trigger_event, condition, roi, Nsamples, Nscanpts, i_run):
                 timeout_happened += 1
                 if timeout_happened == 1:
                     print('Waiting for a frame to arrive.', end='')
-                    if hdcamcon.get_propertyvalue(camctrl.dcamcon.DCAM_IDPROP.TRIGGERSOURCE) == camctrl.dcamcon.DCAMPROP.TRIGGERSOURCE.EXTERNAL:
+                    if hdcamcon.get_propertyvalue(dcamcon.DCAM_IDPROP.TRIGGERSOURCE) == dcamcon.DCAMPROP.TRIGGERSOURCE.EXTERNAL:
                         print(' Check your trigger source.', end='')
                     else:
                         print(' Check <timeout_ms>.', end='')
@@ -419,23 +486,30 @@ def acquire_data(trigger_event, condition, roi, Nsamples, Nscanpts, i_run):
                 result = hdcamcon.wait_capevent_frameready(timeout_ms)
                 # data_raw_time[i_run,i_scanpt_cam,0] = time.perf_counter()
                 # continue
+            # -----------------------------------------------
             if i_scanpt_cam>0:
                 discard_frame = hdcamcon.get_lastframedata()
+                if discard_frame is False:
+                    print("No frame...")
+                    sys.exit()
                 result = hdcamcon.wait_capevent_frameready(timeout_ms)
-            
-            # 
+            # ------------------------------------------------
+            # print(f"Nsamples = {Nsamples}")
             for i_sample in range(0, Nsamples):
+                # if result is True:
                 # wait_capevent_frameready() succeeded
                 if i_sample+1 == Nsamples:
                     # Last frame for a scanpt:: stop PB and take out the last frame
-                    status = pbctrl.pb_stop();    pbctrl.errorCatcher(status);
-                    # pbctrl.run_only_daq(t_align_dc *ms)
+                    # pb.run_only_daq(t_align_dc *ms)
+                    pb.stop_sequence()
                     frame = hdcamcon.get_lastframedata()
+                    # pb.stop_sequence()
                     # print(i_sample, end='')
                     if frame is not False:
                         # print(' frame elo...')
                         # frames[i_sample, :, :] = frame
                         data[i_run,i_scanpt_cam,i_sample,:,:] = frame
+                        # pb.stop_sequence()
                     else:
                         print(" No frame...")
                 # Now the loop exits and clear the event, notify all waiting threads...
@@ -449,6 +523,8 @@ def acquire_data(trigger_event, condition, roi, Nsamples, Nscanpts, i_run):
                     else:
                         print(" No frame...")
                     result = hdcamcon.wait_capevent_frameready(timeout_ms)
+                # else:
+                #     print("Timeout...")
             
             # print('Single scan point end...')
             scan_start_time = time.perf_counter()
@@ -517,7 +593,52 @@ def plot_data(i_max, param, processed_data, x_label, x_unit, roi, n_frames, live
         plt.xlabel(x_label);
         plt.ylabel('Contrast')
         plt.show()
+# --------------------------------------------------------------------------
 
+class focus_adjustment_thread(threading.Thread):
+    
+    def __init__(self, t_exposure, t_align, camera_worker, trigger_event):
+        super().__init__()
+        self.t_exposure = t_exposure
+        self.t_align = t_align
+        self.camera_worker = camera_worker
+        self.trigger_event = trigger_event
+        # self.trigger_condition = trigger_condition
+        # self.trigger_focus_condition = trigger_focus_condition
+
+    def run(self):
+        # self.trigger_event.wait()        # waiting for trigger to be set...
+        # # PB settings
+        # pb.focus_adjustment_sequence(t_exposure=self.t_exposure, t_align=self.t_align)
+        # camera_worker.query_cam_values()
+        # print("starting PB sequence loop")
+        # while self.camera_worker.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+        #     pb.start_sequence()
+        #     time.sleep(pb.min_focus_time/s)
+        #     pb.stop_sequence()
+        # print("PB sequence loop stopped...")
+        # with self.trigger_condition:
+        #     self.trigger_event.clear()   # clear the event
+        #     print("Trigger event cleared...")
+        #     self.trigger_condition.notify_all()  # notify the waiting threads, here the PB thread..
+
+
+        pb.focus_adjustment_sequence(t_exposure=self.t_exposure, t_align=self.t_align)
+        camera_worker.query_cam_values()
+        print("starting PB sequence loop")
+        self.trigger_event.set()
+        self.trigger_event._flag = True
+        print(f"Flag status: {self.trigger_event._flag}")
+        while self.camera_worker.camera_status == dcamcon.DCAMCAP_STATUS.BUSY and self.trigger_event.is_set():
+        # while self.trigger_event.is_set():
+            print(f"{pb.min_focus_time/s} [s], {pb.n_repeat}")
+            pb.start_sequence()
+            time.sleep(pb.min_focus_time/s)
+            # pb.stop_sequence()
+        print("PB sequence loop stopped...")
+        self.trigger_event.clear()   # clear the event
+        self.trigger_event._flag = False
+        print("Trigger event cleared...")
 
 # ----------------------------------------------------------------------------
 class PBThread(threading.Thread):
@@ -557,11 +678,11 @@ class PBThread(threading.Thread):
             instructionList = []
             if self.sequence in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
                 if trial_run[0] == 'n':
-                    sgctrl.set_SG_freq(param)
+                    sg.set_sg_freq(param)
             else:
                 self.seqArgList[0] = param
             
-            the_list = pbctrl.PB_program(instr, self.sequence, self.seqArgList)
+            the_list = pb.PB_program(instr, self.sequence, self.seqArgList)
             # print('the_list: ', the_list)
             for i in range(0, len(the_list)):
                 instructionList.append(the_list[i][0])
@@ -570,23 +691,23 @@ class PBThread(threading.Thread):
             if trial_run[1] == 'n':
                 # print('Starting PB sequence...')
                 if instr == 'cam':
-                    pbctrl.run_sequence_for_camera(instructionList, self.t_exposure, self.t_seq_total, self.N_total)
+                    pb.run_sequence_for_camera(instructionList, self.t_exposure, self.t_seq_total, self.N_total)
                 elif instr == 'cam_level1':
-                    pbctrl.run_sequence_for_camera_level_trigger_1(instructionList)
+                    pb.run_sequence_for_camera_level_trigger_1(instructionList)
                 elif 'levelm' in instr: # changed to 'levelm' in instr; prev instr == 'cam_levelm': to accomodate rot_field_controlled ODMR into the code
                     t_align = self.args[2]      # incoming time in [ns]
                     if instr == 'cam_levelm_trigger_ao':
-                        pbctrl.run_sequence_for_camera_level_trigger_many_ac(instructionList, self.t_exposure, t_align, t_seq_total_i, self.N_total, expCfg.Nsamples)
+                        pb.run_sequence_for_camera_level_trigger_many_ac(instructionList, self.t_exposure, t_align, t_seq_total_i, self.N_total, expCfg.Nsamples)
                     else:
-                        pbctrl.run_sequence_for_camera_level_trigger_many_dc(instructionList, self.t_exposure, t_align, t_seq_total_i, self.N_total)
+                        pb.run_sequence_for_camera_level_trigger_many_dc(instructionList, self.t_exposure, t_align, t_seq_total_i, self.N_total)
                 elif instr == 'cam_timeseries':
                     t_align_dc = self.args[2]
-                    pbctrl.custom_trigger(self.t_exposure, t_align_dc)
+                    pb.custom_trigger(self.t_exposure, t_align_dc)
                 elif instr == 'cam_timeseries_trigger_ao':
                     t_align_rot = self.args[2]
                     t_measurement = self.args[3]
                     t_align_rot_extended = self.args[4]
-                    pbctrl.custom_trigger_rot_field(self.t_exposure, t_align_rot, t_measurement, t_align_rot_extended)
+                    pb.custom_trigger_rot_field(self.t_exposure, t_align_rot, t_measurement, t_align_rot_extended)
                 
                 self.trigger_event.set()  # Set the event to trigger the camera
                 self.inst_set_time_list.append((time.perf_counter()-start_time)*1e3)
@@ -627,29 +748,29 @@ def start_dc_alignment_field(align_data, t_align, n_repetitions):
             instructionList = [[concfg.laser ^ concfg.bz ^ concfg.start_trig, Inst.LOOP, 10, pattern_time*1e9],
                                 [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (t_align*ms/2-pattern_time*1e9)],
                                 [concfg.laser ^ concfg.bx ^ concfg.by, Inst.END_LOOP, 0, (t_align*ms/2)]]
-    pbctrl.run_sequence_for_diode([instructionList])
+    pb.run_sequence_for_diode([instructionList])
     # time.sleep(10)
     print("writing dc alignment data")
     ao_task.write(align_data)
     
 
 if __name__ == '__main__':
-    # global data
     warnings.filterwarnings("ignore", category=matplotlib.MatplotlibDeprecationWarning)
-    
     expCfg = import_module(expCfgFile)
+
     # expCfg.N_scanPts = len(expCfg.scannedParam)
     t_AOM = expCfg.t_AOM
     clk_cyc = 1e3 / concfg.PBclk  # One clk cycle of PB = inverse of the clk freq of PB
     print('\x10 \x1b[38;2;250;250;0mRunning ' + expCfg.saveFileName + ' sequence\x1b[0m')
-    [SG, hdcamcon] = initialize_instr(expCfg.sequence)
+    [sg, ao_task, hdcamcon] = initialize_instr(expCfg.sequence)
+    # ao_task = AnalogOutputTask()
 
     seqctrl.check_params(expCfgFile)
     print("\x10 Parameter checks completed...")
 
     [from_liveframes, roi, savePath, param_save_format, seqArgList, expParamList, Nscanpts, param, instructionList] = initialize_exp(instr,expCfg)
     if trial_run[1]=='n':
-        [exit_code, ao_task, t_exposure, align_aovoltage, align_field, _] = from_liveframes
+        [t_exposure, align_field, _] = from_liveframes
         print(f"t_exposure = {t_exposure} s")
         # t_exposure in seconds
     if (expCfg.sequence == 'esr_seq'):
@@ -680,9 +801,10 @@ if __name__ == '__main__':
     # prepare data for AO - either DC field or rotating field
     if 'trigger_ao' in instr:   # this takes care of triggered timeseries + ODMR type experiments
         # prepare rotational alignment data pattern
-        [dt, t_array, b_rot] = daqctrl.triggered_ao_data(direction, rot_angle, align_field, rot_field_amp, rot_field_freq)
+        [dt, t_array, b_rot] = DAQ_write_pattern.triggered_ao_data(direction, rot_angle, align_field, rot_field_amp, rot_field_freq)
         t_align_rot = np.max(b_rot.shape)*dt       # t_align_rot in seconds: total time of the rotational alignment pattern
-        calib_factor = daqctrl.coil_calibration([1,1,1])                            # coil calibration factor
+        # calib_factor = ao_task.vi_calibration           # coil calibration factor
+        # daqctrl.coil_calibration([1,1,1])
         if instr == 'cam_timeseries_trigger_ao':
             # for timeseries acquisition, we acquire data for the whole duration of measurement, even when the rotating field is ON
             # hence need to adjust the field ON time (t_align_rot) so that frame acquistion (syncrhonous readout mode) can fit in even numbers (sig+ref)
@@ -697,11 +819,12 @@ if __name__ == '__main__':
             t_array = np.hstack((t_array, temp))
 
             b_rot_padded = np.ascontiguousarray(np.vstack((b_rot, bzero_padding)))      # field array with zero padding at the end
-            v_rot_padded = np.zeros_like(b_rot_padded)
-            for i in range(0, b_rot_padded.shape[-1]):
-                v_rot_padded[:,i] = b_rot_padded[:,i]*calib_factor[i]                   # voltage array from the field array, includes the calibration factor..
+            # v_rot_padded = np.zeros_like(b_rot_padded)
+            # for i in range(0, b_rot_padded.shape[-1]):
+            #     v_rot_padded[:,i] = b_rot_padded[:,i]*calib_factor[i]                   # voltage array from the field array, includes the calibration factor..
+            v_rot_padded = b_rot_padded/ao_task.vi_calibration
                 
-            v_rot_padded_prepared = daqctrl.prepare_data_for_write(v_rot_padded)
+            v_rot_padded_prepared = AnalogOutputTask.prepare_data_for_write(v_rot_padded)
             plt.figure(); plt.plot(t_array, b_rot_padded)       # t_array is required just for plotting purposes to verify the actual output
             plt.figure(); plt.plot(t_array, v_rot_padded)
             print(f"Expected t_align_rot = {t_align_rot} seconds")
@@ -721,17 +844,22 @@ if __name__ == '__main__':
             #             # [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (t_align_dc*ms/2-t_align_rot_extended*1e9)],
             #             # [concfg.laser ^ concfg.bx ^ concfg.by ^ concfg.start_trig, Inst.CONTINUE, 0, t_align_rot_extended*1e9],
             #             # [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 4, (t_align_dc*ms/2-t_align_rot_extended*1e9)]]
-            # pbctrl.run_sequence_for_diode([instructionList])
+            # pb.run_sequence_for_diode([instructionList])
             # time.sleep(10)
         
         elif instr == 'cam_levelm_trigger_ao':
             # for measurement case, the frame acquisition happens after the field is OFF, this is more like the other cases with slight modifications in the timescales for the rotating field
-            v_rot = np.zeros_like(b_rot)
-            for i in range(0, b_rot.shape[-1]):
-                v_rot[:,i] = b_rot[:,i]*calib_factor[i]                   # voltage array from the field array, includes the calibration factor..
+            # v_rot = np.zeros_like(b_rot)
+            # for i in range(0, b_rot.shape[-1]):
+            #     v_rot[:,i] = b_rot[:,i]*calib_factor[i]                   # voltage array from the field array, includes the calibration factor..
+            v_rot = b_rot/ao_task.vi_calibration.T
             
-            v_rot_prepared = daqctrl.prepare_data_for_write(v_rot)
+            test_voltage = (np.array(test_field)/ao_task.vi_calibration).T
+            v_rot = np.hstack((v_rot, test_voltage))
+            
+            v_rot_prepared = AnalogOutputTask.prepare_data_for_write(v_rot)
             v_rot_pattern = v_rot_prepared.copy()
+            t_align_rot = np.max(v_rot_pattern.shape)*dt       # t_align_rot in seconds: total time of the rotational alignment pattern
         
         # else:       # handle cases when it is not triggered AO, ie only DC field measurement
     if trial_run[1] == 'n' and hdcamcon is not None:
@@ -750,15 +878,11 @@ if __name__ == '__main__':
         # check this part and simplify..
         # just coverting everything to new library for now..----------------------
 
-        camctrl.configure_camera(instr)  # configure the camera for triggered acquisition
+        camera_worker.configure_camera(instr)  # configure the camera for triggered acquisition
 
-        # the ROI is already set in initialize_experiment()
-        # camctrl.set_roi(roi,True)   # set the ROI for the acquisition
-
-        # t_exposure = hdcamcon.get_propertyvalue(propid=camctrl.dcamcon.DCAM_IDPROP.EXPOSURETIME)  # mind the value... in seconds !!!
-
-    # status = pbctrl.pb_stop(); pbctrl.errorCatcher(status) already stopped...
-    # pbctrl.custom_trigger(t_exposure *1e9, t_align_dc *1e6)
+    # status = pb.pb_stop(); pb.errorCatcher(status) already stopped...
+    # pb.custom_trigger(t_exposure *1e9, t_align_dc *1e6)
+    
     closed = False
     display_parameters = dialog.yesno_box(expCfg.saveFileName + ' Params', 'Channels\t: %s\nRuns\t: %g\nScanPts\t: %g\nSamples\t: %g\nStart\t: %g\nEnd\t: %g\nProceed ?' % (str(concfg.input_terminals), expCfg.Nruns, Nscanpts, expCfg.Nsamples, param[0] / expCfg.plotXaxisUnits, param[-1] / expCfg.plotXaxisUnits))
     
@@ -768,16 +892,16 @@ if __name__ == '__main__':
                 # continue_run = 'yes'
                 # save_flag = False
                 run_start_time = time.perf_counter()    # entire measurement time
-                camctrl.configure_camera(instr)
-                # camctrl.query_cam_values()
-                # t_exposure = hdcamcon.setget_propertyvalue(propid=camctrl.dcamcon.DCAM_IDPROP.EXPOSURETIME, val=t_exposure) # in [s]
-                print(f"Actual exposure time = {hdcamcon.get_propertyvalue(propid=camctrl.dcamcon.DCAM_IDPROP.EXPOSURETIME)*1e3:0.2f} ms")
+                camera_worker.configure_camera(instr)
+                # camera_worker.query_cam_values()
+                # t_exposure = hdcamcon.setget_propertyvalue(propid=dcamcon.DCAM_IDPROP.EXPOSURETIME, val=t_exposure) # in [s]
+                print(f"Actual exposure time = {hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.EXPOSURETIME)*1e3:0.2f} ms")
                 PB_wait_time = []
                 # set buffer and start capture sequence..
-                while not camctrl.startingcapture(size_buffer=Nsamples, sequence=True):
+                while not camera_worker.start_capture(buffer_size=Nsamples, sequence=True, prep_only=True):
                     print("Retrying..")
                 
-                print(f"Set t_align_DC = {t_align_dc} seconds")
+                print(f"Set t_align_DC = {t_align_dc} ms")
                 
                 # if 'trigger_ao' not in instr:
                 # t_align_dc is in ms
@@ -791,7 +915,7 @@ if __name__ == '__main__':
                                         [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (t_align_dc*ms/2-x)],
                                         [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, (t_align_dc*ms/2)]]
                     
-                pbctrl.run_sequence_for_diode([instructionList])
+                pb.run_sequence_for_diode([instructionList])
 
                 print("\x10 Camera configured for %d frames..." % expCfg.Nsamples)    # expCfg.Nsamples=1 (default) - ekta scanpt e ekta e frame
                 print('\x10 %d frames in each cycles...' % frames_per_cyc[0])       # hence, total # frames = frames_per_cyc[0]*expCfg.Nsamples = Nsamples
@@ -801,8 +925,108 @@ if __name__ == '__main__':
                 data = np.zeros((expCfg.Nruns, Nscanpts, Nsamples, vsize, hsize), dtype='uint16')
                 # data_raw_time = np.zeros((expCfg.Nruns, Nscanpts, Nsamples), dtype='float64')
 
+                # trigger_focus_event = threading.Event()
+                # # trigger_focus_condition = threading.Condition()
+                # focus_thread = focus_adjustment_thread(t_exposure*1e9, t_align_rot*1e9, camera_worker, trigger_focus_event)
+                # focus_thread.start()
+                # # focus_thread.join()
+
+                # main loop
                 for i_run in range(0, expCfg.Nruns):     # TODO: add Nruns loop as well
                     print("\x1b[38;2;255;150;10mRun: ", i_run + 1, ' / ', expCfg.Nruns, "\x1b[0m")
+                    if (i_run+1)%5 == 0:
+                        print("Adjusting focus...")
+                        # camera settings
+                        # camera_worker.query_cam_values()
+                        camera_worker.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.TRIGGERSOURCE, dcamcon.DCAMPROP.TRIGGERSOURCE.INTERNAL)
+                        # print("koi??")
+                        # trigger_focus_event.set()
+                        # with trigger_focus_condition:
+                        #     # check whether the event is 'set'... if yes, wait inside the loop - no further execution...
+                        #     while trigger_focus_event.is_set():   # this statement dictates the wait condition: wait until the condition evaluates to False = event cleared..
+                        #         # print("Focus trigger set... Procee")
+                        #     # for 1st execution, this is False
+                        #         camera_worker.start_capture()
+                        #         trigger_focus_condition.wait()        # waits for some event notification via notify() or notify_all()..
+                        #         # whenever notified, the wait ends and proceeds again to check the condition
+                        #         # camera_worker.stop_capture(free_buffer=False)
+                        #     # In this case: it is event clear notification: the condition evaluates to False (the event is cleared = not_set) and below statements are executed...
+                        # trigger_focus_event._flag=False
+                        # print(f"Trigger set (before run): {trigger_focus_event.isSet()}")
+                        # focus_thread.run()
+                        # trigger_focus_event.wait()
+                        # print("Waiting for flag set...")
+                        # print(f"Trigger set: {trigger_focus_event.isSet()}")
+                        # camera_worker.query_cam_values()
+                        # while self.trigger_event.is_set():
+                        pb.focus_adjustment_sequence(t_exposure=t_exposure*1e9, t_align=t_align_rot*1e9, Nsamples=Nsamples, focus_time=min_focus_time*1e9)
+                        print(f"{pb.min_focus_time/s} [s], {pb.n_repeat}")
+                        pb.start_sequence()
+
+                        # camera_worker.start_capture(run_only=True)
+                        time_start = time.perf_counter()
+                        # while camera_worker.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+                        camera_worker.cv_window_status = 0
+                        while (time.perf_counter()-time_start) < pb.min_focus_time/s:
+                            # print(f"Current exposure: {self.exposure}")
+                            # QThread.msleep(1000)  # Sleep for a while to simulate work
+                            # The rest of your program goes here.
+                            # print("holo??")
+                            timeout_happened = 0
+                            
+                            # print("Eta run hochhe??")
+                            res = camera_worker.hdcamcon.wait_capevent_frameready(2000)
+                            if res is not True:
+                                # frame does not come
+                                if res != dcamcon.DCAMERR.TIMEOUT:  # note the != comparison
+                                    print('-NG: Dcam.wait_event() failed with error {}'.format(res))
+                                    break
+
+                                # TIMEOUT error happens
+                                timeout_happened += 1
+                                if timeout_happened == 1:
+                                    print('Waiting for a frame to arrive.', end='')
+                                    if camera_worker.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE) == dcamcon.DCAMPROP.TRIGGERSOURCE.EXTERNAL:
+                                        print(' Check your trigger source.', end ='')
+                                    else:
+                                        print(' Check your <timeout_millisec> calculation in the code.', end='')
+                                    print(' Press Ctrl+C to abort.')
+                                else:
+                                    print('.')
+                                    if timeout_happened > 5:
+                                        timeout_happened = 0
+                                # continue
+
+                            # wait_capevent_frameready() succeeded
+                            camera_worker.last_frame = camera_worker.hdcamcon.get_lastframedata()
+                            # print('frame elo...')
+                            if camera_worker.last_frame is not False:
+                                if not camera_worker.display_frame(camera_worker.hdcamcon.device_title, camera_worker.last_frame):
+                                    # if q | Q is pressed on the cv2 window
+                                    # self.stop()
+                                    cv2.destroyWindow(camera_worker.hdcamcon.device_title)
+                                    # self.query_camera_status()       # expecting BUSY
+                                    camera_worker.camera_status = dcamcon.DCAMCAP_STATUS.READY       # this is done to indicate the class that the capture has stopped
+                                    
+                                    print(f"Live View stopped...")
+                                    break
+                        # self.stopped.emit()  # Emit the stopped signal when the loop exits
+                        # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE, val=2)
+                        cv2.destroyWindow(camera_worker.hdcamcon.device_title)
+                        
+                            # time.sleep(pb.min_focus_time/s)
+                            
+                        pb.stop_sequence()
+                        
+                        # with trigger_focus_condition:
+                        # trigger_focus_event.clear()   # clear the event
+                        # print("Trigger event cleared...")
+                        # trigger_focus_condition.notify_all()  # notify the waiting threads, here the PB thread..
+                        # camera settings
+                        camera_worker.configure_camera(instr)
+                        # camera_worker.query_cam_values()
+                        print("Focus adjusted...")
+                    
                     print('Starting threads...')
                     trigger_event = threading.Event()       # Event object to signal between threads
                     condition = threading.Condition()
@@ -840,14 +1064,14 @@ if __name__ == '__main__':
                     #     instructionList = [[concfg.laser ^ concfg.bx ^ concfg.by ^ concfg.MW, Inst.CONTINUE, 15, x],
                     #                     [concfg.laser ^ concfg.bx ^ concfg.by, Inst.CONTINUE, 0, (t_align_dc*ms/2-x)],
                     #                     [concfg.laser ^ concfg.bz, Inst.BRANCH, 0, (t_align_dc*ms/2)]]
-                    # pbctrl.run_sequence_for_diode([instructionList])
+                    # pb.run_sequence_for_diode([instructionList])
                     # time.sleep(15*t_align_dc/1e3)
 
                     if 'trigger_ao' in instr:
-                        daqctrl.create_retriggerable_ao_task(ao_task, v_rot_pattern)
+                        ao_task.create_retriggerable_ao_task(v_rot_pattern.shape)
                         # if instr == 'cam_timeseries_trigger_ao':  # this may not be required now since the variable 'v_rot_pattern' is generalized from 'v_rot_padded_prepared'
                         print("Starting alignment pattern!")
-                        daqctrl.start_retriggerable_ao_task(ao_task, v_rot_pattern, dt)
+                        ao_task.start_retriggerable_ao_task(v_rot_pattern)
                         # time.sleep(0.04)
                     scan_thread.start()
                     
@@ -870,9 +1094,10 @@ if __name__ == '__main__':
                     # else:
                     #     print("Error in acquisition: i_scanpt_inst != i_scanpt_cam!!")
                     # if expCfg.Nruns > 1:
-                    #     camctrl.live_frames(ao_task, roi=[], exposure=t_exposure, t_align_dc=t_align_dc, field=align_field, running=True)
+                    #     camera_worker.live_frames(ao_task, roi=[], exposure=t_exposure, t_align_dc=t_align_dc, field=align_field, running=True)
                     
                 # all runs complete.. process for display...
+                # focus_thread.join()
                 run_end_time = time.perf_counter()
                 run_time = run_end_time - run_start_time  # entire measurement time
                 print(f"Run time = {run_time:0.2f} s")
@@ -881,10 +1106,10 @@ if __name__ == '__main__':
                     processed_data = process_data(i_scanpt, roi, Nsamples, data[i_run,:,:,:,:])  # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
                     plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel, expCfg.plotXaxisUnits, roi, Nsamples, live=False)
 
-                # camctrl.query_cam_values()
+                # camera_worker.query_cam_values()
 
                 # Close all after full acquisition
-                closed = close_all(SG, hdcamcon, ao_task)
+                closed = close_all(sg, hdcamcon, ao_task)
 
                 savefile_yn = dialog.yesno_box('Data Saving', "Save data to file?")
                 if savefile_yn == 'yes':
@@ -909,6 +1134,7 @@ if __name__ == '__main__':
                 # time_list = 
 
             except KeyboardInterrupt:
+                # focus_thread.join()
                 run_end_time = time.perf_counter()
                 run_time = run_end_time - run_start_time  # entire measurement time
                 print('\x1b[38;2;250;100;0mUser Interrupted. Quitting...\x1b[0m')
@@ -927,8 +1153,9 @@ if __name__ == '__main__':
             #     if (i_run+1)==expCfg.Nruns: # Save data of the final run here
             #         save_data(len(concfg.input_terminals), datafilename, data, expCfg.Nsamples, reads_per_cyc)
             finally:
+                # focus_thread.join()
                 if not closed:
-                    closed = close_all(SG, hdcamcon, ao_task)
+                    closed = close_all(sg, hdcamcon, ao_task)
 
                 print("\x10 Read \x1b[38;2;250;150;50m%d*%d\x1b[0m frames at each pt." % (frames_per_cyc[0], expCfg.Nsamples))
 
@@ -945,6 +1172,7 @@ if __name__ == '__main__':
 
                     [next_params_format, expParamList] = extra_param_save_details(scan_time_list, run_time, roi, t_exposure)
                     save_parameters(paramfilename, next_params_format, expParamList)
+                plt.close('all')
 
                 # sys.exit(exit_code)       # the exit code is the one returned from the pyqt app
                 # scan_time_list in seconds; exec_time in seconds
@@ -958,13 +1186,13 @@ if __name__ == '__main__':
             # if ao_task is not None and ao_task.is_task_done() == False:
             #     print("Task is already initialized and running. No need to reinitialize.")
             # else:
-            ao_task = daqctrl.config_ao("P6363")
+            ao_task = AnalogOutputTask()
             print("> Task defined...")
             
             # DC alignment at the beginning of each run if it is a triggered AO based manipulation
             # start DC field
-            output_aovoltage = daqctrl.coil_calibration(align_field)
-            daqctrl.set_outputs_to_constant(ao_task, output_aovoltage)
+            # output_aovoltage = AnalogOutputTask.prepare_data_for_write(np.array(align_field)/ao_task.vi_calibration)
+            ao_task.set_outputs_to_constant(align_field)
             if t_align_dc < 50:
                 instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW ^ concfg.start_trig, Inst.CONTINUE, 0, t_align_dc*ms/2],
                                 [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, t_align_dc*ms/2]]
@@ -977,13 +1205,13 @@ if __name__ == '__main__':
                 instructionList = [[concfg.laser ^ concfg.bx ^ concfg.by ^ concfg.MW, Inst.CONTINUE, 15, x],
                                         [concfg.laser ^ concfg.bx ^ concfg.by, Inst.CONTINUE, 0, (t_align_dc*ms/2-x)],
                                         [concfg.laser ^ concfg.bz, Inst.BRANCH, 0, (t_align_dc*ms/2)]]
-            pbctrl.run_sequence_for_diode([instructionList])
+            pb.run_sequence_for_diode([instructionList])
             time.sleep(10*t_align_dc/1e3)
             if 'trigger_ao' in instr:
-                daqctrl.create_retriggerable_ao_task(ao_task, v_rot_pattern)
+                ao_task.create_retriggerable_ao_task(v_rot_pattern.shape)
                 if instr == 'cam_timeseries_trigger_ao':
                     print("Starting alignment pattern!")
-                    daqctrl.start_retriggerable_ao_task(ao_task, v_rot_pattern, dt)
+                    ao_task.start_retriggerable_ao_task(v_rot_pattern)
                 print("> Alignment field started!")
             
             instructionList = []
@@ -992,39 +1220,39 @@ if __name__ == '__main__':
             else:
                 seqArgList[0] = param[seq_no_plot[-1]]
             # print(seqArgList)
-            the_list = pbctrl.PB_program(instr, expCfg.sequence, seqArgList)
+            the_list = pb.PB_program(instr, expCfg.sequence, seqArgList)
             # print(the_list)
             # print(t_seq_total)
             for i in range(0, len(the_list)):
                 instructionList.append(the_list[i][0])
             if instr == 'cam':
-                pbctrl.run_sequence_for_camera(instructionList, t_exposure, t_seq_total[seq_no_plot[-1]], N_total)
+                pb.run_sequence_for_camera(instructionList, t_exposure, t_seq_total[seq_no_plot[-1]], N_total)
             elif instr == 'cam_level':
-                pbctrl.run_sequence_for_camera_level_trigger_1(instructionList)
+                pb.run_sequence_for_camera_level_trigger_1(instructionList)
             elif instr == 'cam_levelm':
                 # print(t_exposure)
-                pbctrl.run_sequence_for_camera_level_trigger_many(instructionList, t_exposure * 1e9, t_align_dc * 1e6, t_seq_total[seq_no_plot[-1]], N_total)      # t_exposure [s], t_align_dc [ms] at the beginning...
-            # pbctrl.pb_close(); print("\x10 Pulse Blaster closed...\x1b[0m")
+                pb.run_sequence_for_camera_level_trigger_many(instructionList, t_exposure * 1e9, t_align_dc * 1e6, t_seq_total[seq_no_plot[-1]], N_total)      # t_exposure [s], t_align_dc [ms] at the beginning...
+            # pb.pb_close(); print("\x10 Pulse Blaster closed...\x1b[0m")
             elif instr == 'cam_timeseries':
-                pbctrl.custom_trigger(t_exposure *1e9, t_align_dc *1e6)
+                pb.custom_trigger(t_exposure *1e9, t_align_dc *1e6)
             elif instr == 'cam_timeseries_trigger_ao':
                 print("Run PB continuously...")
-                pbctrl.custom_trigger_rot_field_continuous_uncorrected(t_exposure *1e9, t_align_rot *1e9, t_meas *1e6, t_align_rot_extended *1e9)
-                # pbctrl.custom_trigger_rot_field_continuous(t_exposure *1e9, t_align_rot *1e9, t_meas *1e6, t_align_rot_extended *1e9)
-                # pbctrl.custom_trigger_rot_field(t_exposure *1e9, t_align_rot_extended *1e9, t_meas*1e6, t_align_rot_extended *1e9)
+                pb.custom_trigger_rot_field_continuous_uncorrected(t_exposure *1e9, t_align_rot *1e9, t_meas *1e6, t_align_rot_extended *1e9)
+                # pb.custom_trigger_rot_field_continuous(t_exposure *1e9, t_align_rot *1e9, t_meas *1e6, t_align_rot_extended *1e9)
+                # pb.custom_trigger_rot_field(t_exposure *1e9, t_align_rot_extended *1e9, t_meas*1e6, t_align_rot_extended *1e9)
             
             # time.sleep(4)
             # instructionList = [[concfg.start_trig, Inst.CONTINUE, 0, 1*ms],
             #                    [0, Inst.BRANCH, 0, 1*ms]]
-            # pbctrl.run_sequence_for_diode([instructionList])
-            # daqctrl.set_outputs_to_zero(ao_task)
+            # pb.run_sequence_for_diode([instructionList])
+            # ao_task.set_outputs_to_constant([0]*3)
             # ao_task.close()
-            pbctrl.pb_close()
+            pb.closePB()
         
     else:
         print("Measurement aborted...")
         if not closed:
-            closed = close_all(SG, hdcamcon, ao_task)
+            closed = close_all(sg, hdcamcon, ao_task)
         
     # return instructionList
 

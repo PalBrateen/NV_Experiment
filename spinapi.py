@@ -26,9 +26,10 @@ except:
 def enum(**enums):
     return type('Enum', (), enums)
 		
-ns = 1.0
-us = 1000.0
-ms = 1000000.0
+ns = 1e0
+us = 1e3
+ms = 1e6
+s = 1e9
 
 MHz = 1.0
 kHz = 0.001
