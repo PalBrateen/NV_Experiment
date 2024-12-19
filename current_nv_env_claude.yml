@@ -1,0 +1,44 @@
+name: NV
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # python
+  - python>=3.9,<3.12
+
+  # spyder
+  - spyder<6.0.0
+
+  # Jupyter
+  - ipykernel
+  - jupyter
+  - jupyterlab
+  - jupyterthemes
+  #- notebook
+
+  # scientific computing
+  - numpy
+  - scipy
+  - scikit-image
+  - matplotlib
+  - seaborn
+  - vitables
+  - trackpy
+  - pims
+  - h5py
+
+  # hardware interface
+  - pyvisa
+  - nidaqmx-python>=1.0
+  - pylablib
+
+  # GUI and visual
+  - pyqt
+  - opencv
+  
+  # Utilities
+  - keyboard
+  - screeninfo
+  - colored
+
+  # conda create -n test_env1 python>=3.9 python<3.12 numpy scipy scikit-image pyqt pyqtgraph pyvisa nidaqmx-python>=1.0 vitables matplotlib seaborn spyder jupyter jupyterlab ipykernel trackpy pims dask h5py opencv --dry-run
