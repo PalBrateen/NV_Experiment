@@ -1,3 +1,4 @@
+
 #%%-------------------------  USER INPUT  ---------------------------------------------------#
 #PB clock frequency (in MHz):
 PBclk = 500
@@ -21,7 +22,7 @@ PB_by = 6
 PB_bz = 7
 
 # DAQ Connections-------------------------------------------------------
-input_terminals = ["P6363/ai15"]#, "P6363/ai8"]
+input_terminals = [21]#, "P6363/ai8"]
 # Detector connected to AI7 and PD to AI6
 conv_clk_terminal = "PFI9"     # ADC conversion pulses
 samp_clk_terminal = "PFI14"     # Start sampling from the channels in the scan list
@@ -34,12 +35,10 @@ def cal_samp_rate():
     return daq_max_samp_rate
 
 daq_max_samp_rate = cal_samp_rate()
-min_voltage=-10  # Max/min voltage range of the photodiode signal
-max_voltage=10
 
 #SRS Connections-------------------------------------------------------
-serialaddr = 5
-model_name='SG384'
+sg_addr = ["ASRL4::INSTR", "TCPIP0::10.56.10.12::inst0::INSTR"]
+sg_model_name='SG384'
 
 #------------------------- END OF USER INPUT ----------------------------------#
 
@@ -59,4 +58,44 @@ by = 2**PB_by
 bz = 2**PB_bz
 
 # def update_connections():
+
+params = {
+    'pb': {
+        # 'pb_clk': PBclk,
+        'triggers': {
+            'laser': laser,
+            'start_trig': start_trig,
+            'samp_clk': samp_clk,
+            'mw': MW,
+            'bx': bx,
+            'by': by,
+            'bz': bz,
+            'camera': camera,
+            'I': I,
+            'Q': Q,
+        },
+        # 'pb_bits': {
+            # 'PB_AOM': PB_AOM,
+            # 'PB_start_trig': PB_start_trig,
+            # 'PB_samp_clk': PB_samp_clk,
+            # 'PB_MW': PB_MW,
+            # 'PB_bx': PB_bx,
+            # 'PB_by': PB_by,
+            # 'PB_bz': PB_bz,
+            # 'PB_camera': PB_camera,
+            # 'PB_I': PB_I,
+            # 'PB_Q': PB_Q,
+            # },
+    },
+    # 'daq': {
+    #     'input_terminals': input_terminals,
+    #     'samp_clk_terminal': samp_clk_terminal,
+    #     'start_trig_terminal': start_trig_terminal,
+    #     'daq_max_samp_rate': daq_max_samp_rate,
+    #     # 'conv_clk_terminal': conv_clk_terminal,
+    # },
+    # 'mw': {
+    #     'address': sg_addr,
+    # }
+}
     

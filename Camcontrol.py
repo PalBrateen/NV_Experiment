@@ -27,7 +27,7 @@ class InputApp(QWidget):
         self.b_is_on = False  # Initial state of the B toggle button
         self.pb_is_cw = True
         self.pb = PulseBlaster()
-        self.roi = roi
+        self.roi = [0,0,2048,2048] if roi == [] else roi
 
         self.initUI(exposure, t_align, field)
         self.camera_thread = CameraThread(self.ao_task, cam_worker, self.roi, exposure, field)
@@ -223,17 +223,18 @@ class InputApp(QWidget):
         #                     [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, self.t_align/2 *1e6]]
         # self.pb.run_sequence_for_diode([instructionList])
         
-        if self.t_align < 50:
-            instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, self.t_align*1e6/2],
-                            [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, self.t_align*1e6/2]]
-        else:
-            # t_align is in ms
-            duty = 0.07
-            x = np.ceil(duty*self.t_align*1e6/(1-duty)/(10*1e6))*10*1e6       # in ns
-            instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, x],
-                            [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (self.t_align/2*1e6 - x)],
-                            [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, self.t_align/2*1e6]]
-        self.pb.run_sequence_for_diode([instructionList])
+        # enable this for the case of ROTATIONAL DECOUPLING experiments..
+        # if self.t_align < 50:
+        #     instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, self.t_align*1e6/2],
+        #                     [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, self.t_align*1e6/2]]
+        # else:
+        #     # t_align is in ms
+        #     duty = 0.07
+        #     x = np.ceil(duty*self.t_align*1e6/(1-duty)/(10*1e6))*10*1e6       # in ns
+        #     instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, x],
+        #                     [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (self.t_align/2*1e6 - x)],
+        #                     [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, self.t_align/2*1e6]]
+        # self.pb.run_sequence_for_diode([instructionList])
         
         self.close()
     
@@ -265,9 +266,11 @@ class InputApp(QWidget):
     #     self.exposure_changed.emit(value)
 
     def closeEvent(self, event):
-        self.on_input_changed
+        self.on_input_changed()
         self.worker.stop_capture()
         self.camera_thread.stop()
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
         event.accept()
         QApplication.quit()  # Ensure the entire application exits
 
@@ -281,14 +284,13 @@ class CameraWorker(QObject):
     # stopped = pyqtSignal() # connects to the CameraThread class: stops the thread when CameraWorker stops; not stopping CameraWorker now anyways
     # opencv_window_status = {'not created':0, 'created and open':1, 'closed by user':-1}
 
-    def __init__(self, ao_task=None, roi=[], exposure=0.01, field=None):
+    def __init__(self, ao_task=None, roi=[], exposure=0.01, field=None, simulate=False):
         # incoming exposure in [s]
         super().__init__()
         self.camera_status = None
         self.ao_task = ao_task      # AO task instance
         # self.ao_task.task_state = "running"
         self.align_field = field
-        self.last_frame = np.array([])
         self.trigger_sources = dcamcon.DCAMPROP.TRIGGERSOURCE
         self.trigger_actives = dcamcon.DCAMPROP.TRIGGERACTIVE
         # OpenCV window status.
@@ -297,17 +299,23 @@ class CameraWorker(QObject):
         # -1 = close manually by user 
         self.cv_window_status = 0
         self.roi = [0,0,2048,2048] if roi == [] else roi
+        self.last_frame = (np.random.rand(*self.roi[-2:])*(2**16)).astype(np.uint16).transpose()
         self.subarray_mode = dcamcon.DCAMPROP.MODE.OFF
         self.exposure = exposure           # exposure in [s]
         self.hdcamcon = None
+        self.simulate = simulate
+        self.device_title = "SimCam"
 
         # self.init_cam()
     
     def query_camera_status(self):
         """Returns the status of camera invoking dcam.cap_status().
         """
-        self.camera_status = dcamcon.DCAMCAP_STATUS(self.hdcamcon.dcam.cap_status())
-        print(f"Camera status: {self.camera_status.name}")
+        if not self.simulate:
+            self.camera_status = dcamcon.DCAMCAP_STATUS(self.hdcamcon.dcam.cap_status())
+            print(f"Camera status: {self.camera_status.name}")
+        else:
+            print("SimCam...")
 
     def init_cam(self):
         """Initialize DCAM-API and and initialize the camera
@@ -316,43 +324,46 @@ class CameraWorker(QObject):
         -------
             None
         """
+        try:
+            # Initialize DCAM-API, proceed if it returns True
+            while not dcamcon.dcamcon_init(simulate=self.simulate):
+                print("\x1b[38;2;250;50;0mCheck Camera | Close HCImageLive | other DCAM instances...\x1b[0m")
+                time.sleep(2)
 
-        # Initialize DCAM-API, proceed if it returns True
-        while not dcamcon.dcamcon_init():
-            print("\x1b[38;2;250;50;0mCheck Camera | Close HCImageLive | other DCAM instances...\x1b[0m")
-            time.sleep(2)
+            # select the 'only' camera
+            # The call below returns the handle (DCAMCON handle) to the selected camera
+            # It is an object of class DCAMCON
+            # the attributes are deviceindex, dcam, device_list, __number_of_frames
+            self.hdcamcon = dcamcon.dcamcon_choose_and_open(simulate=self.simulate)
+            # this is the DCAMCON handle to the camera
+            # the dcam handle is already assigned to the camera (access DCAM handle by hdcamcon.dcam) and the dcam.dev_open() is already called..
 
-        # select the 'only' camera
-        # The call below returns the handle (DCAMCON handle) to the selected camera
-        # It is an object of class DCAMCON
-        # the attributes are deviceindex, dcam, device_list, __number_of_frames
-        self.hdcamcon = dcamcon.dcamcon_choose_and_open()
-        # this is the DCAMCON handle to the camera
-        # the dcam handle is already assigned to the camera (access DCAM handle by hdcamcon.dcam) and the dcam.dev_open() is already called..
+            if self.hdcamcon is not None:
+                # self.query_camera_status()     # UNSTABLE
+                self.device_title = self.hdcamcon.device_title
+                print("Using " + self.device_title)
+                # example of directly using DCAM functions
+                # print(hdcamcon.dcam.dev_getstring(idstr=dcamcon.DCAM_IDSTR.CAMERA_SERIESNAME))
+                # print(hdcamcon.dcam.dev_getstring(idstr=dcamcon.DCAM_IDSTR.MODEL))
 
-        if self.hdcamcon is not None:
-            # self.query_camera_status()     # UNSTABLE
-            print("Using " + self.hdcamcon.device_title)
-            # example of directly using DCAM functions
-            # print(hdcamcon.dcam.dev_getstring(idstr=dcamcon.DCAM_IDSTR.CAMERA_SERIESNAME))
-            # print(hdcamcon.dcam.dev_getstring(idstr=dcamcon.DCAM_IDSTR.MODEL))
+                # set the trigger to 1 (INTERNAL) and subarray to OFF
+                self.trigger_mode = dcamcon.DCAMPROP.TRIGGERSOURCE.INTERNAL
+                result = self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE, val=self.trigger_mode)
+                if result:
+                    print("Started with Internal Trigger...")
 
-            # set the trigger to 1 (INTERNAL) and subarray to OFF
-            self.trigger_mode = dcamcon.DCAMPROP.TRIGGERSOURCE.INTERNAL
-            result = self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE, val=self.trigger_mode)
-            if result:
-                print("Started with Internal Trigger...")
-
-            self.subarray_mode = dcamcon.DCAMPROP.MODE.OFF
-            result = self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.SUBARRAYMODE, val=self.subarray_mode)
-            if result:
-                print("SUBARRAY OFF")
-            print("Just init'd..")
-            self.query_camera_status()     # UNSTABLE
-        else:
-            print("Camera NOT found!!")
-            self.camera_status = None       # dcamcon.DCAMCAP_STATUS(self.hdcamcon.cam_status()) will also return None
-            sys.exit()
+                self.subarray_mode = dcamcon.DCAMPROP.MODE.OFF
+                result = self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.SUBARRAYMODE, val=self.subarray_mode)
+                if result:
+                    print("SUBARRAY OFF")
+                print("Just init'd..")
+                self.query_camera_status()     # UNSTABLE
+            else:
+                print("Camera NOT found!!")
+                self.camera_status = None       # dcamcon.DCAMCAP_STATUS(self.hdcamcon.cam_status()) will also return None
+                sys.exit()
+        except Exception as e:
+            print(f"Error in Camcontrol.py > CameraWorker.init_cam(): {e}")
 
     def uninit_cam(self):
         """Close camera and uninitialize DCAM-API. Stops capture, releases buffers, clears the device list (device_list) and then calls Dcamapi.uninit()
@@ -379,8 +390,8 @@ class CameraWorker(QObject):
             frame_width = frame_size[1]
             frame_height = frame_size[0]
 
-            window_pos_left = 156
-            window_pos_top = 48
+            window_pos_left = 250
+            window_pos_top = 0
 
             screeninfos = get_monitors()
 
@@ -455,7 +466,7 @@ class CameraWorker(QObject):
         """
         # self.roi = roi
         print('setting roi...')
-
+        # print(self.roi)
         # switch off subarray mode and go to full resolution
         self.subarray_mode = dcamcon.DCAMPROP.MODE.OFF
         print("calling set_roi..")
@@ -465,13 +476,15 @@ class CameraWorker(QObject):
         factor = int(65535/(frame.ptp())) if frame.max() < 65535 else 1
         frame = (frame.copy() - frame.min()) * factor
 
-        # if self.roi==[]:
         self.cv_window_status=0
-        self.set_window_size(camera_title='Select ROI', frame_size=frame.shape)
-        # now open a window and select the ROI
+        # Use a single window creation method: open a window and select the ROI
+        # if self.roi==[]:
+        # self.set_window_size(camera_title='Select ROI', frame_size=frame.shape)
+
         cv2.namedWindow("Select ROI", cv2.WINDOW_NORMAL|cv2.WINDOW_KEEPRATIO)
         self.roi = cv2.selectROI("Select ROI", frame)
         cv2.destroyWindow("Select ROI")
+        cv2.waitKey(1)
         # print(self.roi)
         # if self.roi[2]==0 or self.roi[3]==0:   # assign default values if selectROI() is skipped
         if self.roi[-1]==0 or self.roi[-2]==0:   # assign default values if selectROI() is skipped
@@ -498,37 +511,39 @@ class CameraWorker(QObject):
 
     def set_roi(self):
         """Set the ROI values"""
+        try:
+            # (BUSY) stop the capture and (READY) release buffer to set ROI
+            # print("Inside set_roi()...")
+            # print(self.camera_status)
+            if self.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+                # self.camera_status = dcamcon.DCAMCAP_STATUS.READY       # change camera_status and break the start_capture() loop..
+                self.hdcamcon.stopcapture()                             # this alone is not sufficient to break the capture loop
+                print("Capture stopped to set ROI...")
+                self.query_camera_status()                              # expecting READY
 
-        # (BUSY) stop the capture and (READY) release buffer to set ROI
-        # print("Inside set_roi()...")
-        # print(self.camera_status)
-        if self.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
-            # self.camera_status = dcamcon.DCAMCAP_STATUS.READY       # change camera_status and break the start_capture() loop..
-            self.hdcamcon.stopcapture()                             # this alone is not sufficient to break the capture loop
-            print("Capture stopped to set ROI...")
-            self.query_camera_status()                              # expecting READY
+            if self.camera_status == dcamcon.DCAMCAP_STATUS.READY:
+                self.hdcamcon.releasebuffer()
+                print("Buffer released to set ROI...")
+                self.query_camera_status()     # expecting STABLE
 
-        if self.camera_status == dcamcon.DCAMCAP_STATUS.READY:
-            self.hdcamcon.releasebuffer()
-            print("Buffer released to set ROI...")
             self.query_camera_status()     # expecting STABLE
 
-        self.query_camera_status()     # expecting STABLE
+            # set the MODE when STABLE|UNSTABLE (cannot be done in BUSY|READY)
+            self.subarray_mode = self.hdcamcon.setget_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYMODE, val=self.subarray_mode)
 
-        # set the MODE when STABLE|UNSTABLE (cannot be done in BUSY|READY)
-        self.subarray_mode = self.hdcamcon.setget_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYMODE, val=self.subarray_mode)
-
-        # set roi values if subarray_mode is ON
-        if self.subarray_mode == dcamcon.DCAMPROP.MODE.ON:
-            # set the parameters here..
-            # print("Hobe:",self.subarray_mode)
-            if (self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYHSIZE, val=self.roi[2]) and self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYHPOS, val=self.roi[0]) and
-            self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYVSIZE, val=self.roi[3]) and self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYVPOS, val=self.roi[1])):
-                # print("Setting to", self.roi)
-                pass
-            else:
-                print("Could not set ROI parameters...")
-        print("ROI set to", self.roi)
+            # set roi values if subarray_mode is ON
+            if self.subarray_mode == dcamcon.DCAMPROP.MODE.ON:
+                # set the parameters here..
+                # print("Hobe:",self.subarray_mode)
+                if (self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYHSIZE, val=self.roi[2]) and self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYHPOS, val=self.roi[0]) and
+                self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYVSIZE, val=self.roi[3]) and self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.SUBARRAYVPOS, val=self.roi[1])):
+                    # print("Setting to", self.roi)
+                    pass
+                else:
+                    print("Could not set ROI parameters...")
+            print("ROI set to", self.roi)
+        except Exception as e:
+            print(f"Error: in Camcontrol.py > CameraWorker.set_roi(): {e}")
 
     def display_roi(self):
         """Display the selected ROI in a matplotlib figure
@@ -545,46 +560,56 @@ class CameraWorker(QObject):
     def configure_camera(self, instr: str):
         self.trigger_mode = dcamcon.DCAMPROP.TRIGGER_MODE.NORMAL
         self.trigger_source = dcamcon.DCAMPROP.TRIGGERSOURCE.EXTERNAL
-        if instr in ['cam_level1', 'cam_levelm']:
+        # if instr in ['cam_level1', 'cam_levelm']:         # generalized below
+        if 'level' in instr:
             self.triggeractive = dcamcon.DCAMPROP.TRIGGERACTIVE.LEVEL
-        else:
+        elif 'sync' in instr:
             self.triggeractive = dcamcon.DCAMPROP.TRIGGERACTIVE.SYNCREADOUT
+        else:
+            sys.exit("Invalid instrument name...")
 
-        # print the output trigger options that have been set in the function (use dictionary)
-        # trigger mode
-        self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGER_MODE, val=self.trigger_mode)
-        # trigger source: INTERNAL = 1, EXTERNAL = 2, SOFTWARE = 3, MASTERPULSE = 4
-        self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE, val=self.trigger_source)
-        # trigger polarity: +ve(2), -ve(1)
-        self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERPOLARITY, val=2)
-        # trigger active: EDGE = 1, LEVEL = 2, SYNCREADOUT = 3, POINT = 4
-        # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERACTIVE, val=self.triggeractive)
-        # trigger times
-        self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERTIMES, val=1)        # kotogulo trigger pulse er pore current exposure ta sesh hobe
+        try:
+            # print the output trigger options that have been set in the function (use dictionary)
+            # trigger mode
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGER_MODE, val=self.trigger_mode)
+            # trigger source: INTERNAL = 1, EXTERNAL = 2, SOFTWARE = 3, MASTERPULSE = 4
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE, val=self.trigger_source)
+            # trigger polarity: +ve(2), -ve(1)
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERPOLARITY, val=2)
+            # trigger active: EDGE = 1, LEVEL = 2, SYNCREADOUT = 3, POINT = 4
+            # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERACTIVE, val=self.triggeractive)
+            # this is commented since the method cannot be called after refocusing as the camera is BUSY
+            # trigger times
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERTIMES, val=1)        # kotogulo trigger pulse er pore current exposure ta sesh hobe
 
-        # output trigger kind: LOW(1), EXPOSURE(2), PROGRAMABLE(3), TRIGGER READY(4), HIGH(5)
-        self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_KIND, val=4)
-        # output trigger polarity: NEGATIVE(1), POSITIVE(2)
-        self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_POLARITY, val=2)
-        # output trigger source: only for PROGRAMMABLE(3) option above: READOUT END(2), VSYNC(3), TRIGGER(6)
-        # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_SOURCE, val=2)
-        # output trigger delay: only for PROGRAMMABLE(3) option above: delay of the output trigger from the edge of the event in seconds (0 to 10 seconds)
-        # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_DELAY, val=0)
-        # output trigger period: only for PROGRAMMABLE(3) option above: On time duration of the trigger pulse in seconds (1 us to 10 seconds)
-        # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_PERIOD, val=1e-3)
+            # output trigger kind: LOW(1), EXPOSURE(2), PROGRAMABLE(3), TRIGGER READY(4), HIGH(5)
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_KIND, val=3)
+            # output trigger polarity: NEGATIVE(1), POSITIVE(2)
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_POLARITY, val=2)
+            # output trigger source: only for PROGRAMMABLE(3) option above: READOUT END(2), VSYNC(3), TRIGGER(6)
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_SOURCE, val=2)
+            # output trigger delay: only for PROGRAMMABLE(3) option above: delay of the output trigger from the edge of the event in seconds (0 to 10 seconds)
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_DELAY, val=0)
+            # output trigger period: only for PROGRAMMABLE(3) option above: On time duration of the trigger pulse in seconds (1 us to 10 seconds)
+            self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.OUTPUTTRIGGER_PERIOD, val=1e-3)
+        except Exception as e:
+            print(f"Error: in Camcontrol.py > CamWorker.configure_camera(): {e}")
         
-    def query_cam_values(self):
-        self.trigger_mode = self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGER_MODE)
-        self.trigger_source = self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE)
-        self.triggeractive = self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERACTIVE)
+    def query_cam_settings(self):
+        try:
+            self.trigger_mode = self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGER_MODE)
+            self.trigger_source = self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE)
+            self.triggeractive = self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERACTIVE)
+        except Exception as e:
+            print(f"Error: in Camcontrol.py > CamWorker.query_cam_settings(): {e}")
         
-        print(dcamcon.DCAMPROP.TRIGGER_MODE(self.trigger_mode).name)         # Normal(1) and start(6) trigger as options
-        print(dcamcon.DCAMPROP.TRIGGERSOURCE(self.trigger_source).name)       # Internal(1), external(2), software(3), master_pulse(4)
-        print(dcamcon.DCAMPROP.TRIGGERPOLARITY(self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERPOLARITY)).name)     # +ve(2), -ve(1)
-        print(dcamcon.DCAMPROP.TRIGGERACTIVE(self.triggeractive).name)      # Edge(1), Level(2), Syncreadout(3)
+        print(f"Trigger mode = {dcamcon.DCAMPROP.TRIGGER_MODE(self.trigger_mode).name}")         # Normal(1) and start(6) trigger as options
+        print(f"Trigger source = {dcamcon.DCAMPROP.TRIGGERSOURCE(self.trigger_source).name}")       # Internal(1), external(2), software(3), master_pulse(4)
+        print(f"Trigger polarity = {dcamcon.DCAMPROP.TRIGGERPOLARITY(self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERPOLARITY)).name}")     # +ve(2), -ve(1)
+        print(f"Trigger active = {dcamcon.DCAMPROP.TRIGGERACTIVE(self.triggeractive).name}")      # Edge(1), Level(2), Syncreadout(3)
         print(f"Exposure time = {self.hdcamcon.get_propertyvalue(propid=dcamcon.DCAM_IDPROP.EXPOSURETIME)} [s]")
     
-    def start_capture(self, buffer_size: int=10, sequence: bool=True, prep_only: bool=False, run_only: bool=False):
+    def start_capture(self, buffer_size: int=1, sequence: bool=True, prep_only: bool=False, run_only: bool=False):
         """Set the buffer and start the 'sequence' (not snap) capture.
 
         Parameters
@@ -599,12 +624,12 @@ class CameraWorker(QObject):
         -------
             None
         """
-
+        self.roi = [0,0,100,100] if self.simulate and self.roi==[] else self.roi
         timeout_ms = 500
         print("In start_capture()...")
         self.query_camera_status()
         # self.set_roi()
-        if not run_only:
+        if not run_only and not self.simulate:
             if self.camera_status == dcamcon.DCAMCAP_STATUS.STABLE or self.camera_status == dcamcon.DCAMCAP_STATUS.UNSTABLE:
                 self.hdcamcon.allocbuffer(buffer_size)
                 print("Buffer allocated...")
@@ -625,12 +650,15 @@ class CameraWorker(QObject):
             
             if prep_only:
                 return True
+        if self.simulate:
+            self.camera_status = dcamcon.DCAMCAP_STATUS.BUSY
         
         # capture
         self.cv_window_status=0
         # rand_number = int(np.random.rand()*100)
-        # camera_title = self.hdcamcon.device_title+str(rand_number)
-        self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.EXPOSURETIME, self.exposure)  # Set exposure on the instrument
+        # camera_title = self.device_title+str(rand_number)
+        if not self.simulate:
+            self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.EXPOSURETIME, self.exposure)  # Set exposure on the instrument
         while self.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
             # print(f"Current exposure: {self.exposure}")
             # QThread.msleep(1000)  # Sleep for a while to simulate work
@@ -638,7 +666,7 @@ class CameraWorker(QObject):
             timeout_happened = 0
             
             # print("Eta run hochhe??")
-            res = self.hdcamcon.wait_capevent_frameready(timeout_ms)
+            res = self.hdcamcon.wait_capevent_frameready(timeout_ms) if not self.simulate else True
             if res is not True:
                 print("Timeout...")
                 # frame does not come
@@ -662,13 +690,13 @@ class CameraWorker(QObject):
                 # continue
 
             # wait_capevent_frameready() succeeded
-            self.last_frame = self.hdcamcon.get_lastframedata()
+            self.last_frame = self.hdcamcon.get_lastframedata() if not self.simulate else (np.random.rand(*self.roi[-2:])*(2**16)).astype(np.uint16).transpose()
             # print('frame elo...')
             if self.last_frame is not False:
-                if not self.display_frame(self.hdcamcon.device_title, self.last_frame):
+                if not self.display_frame(self.device_title, self.last_frame):
                     # if q | Q is pressed on the cv2 window
                     # self.stop()
-                    cv2.destroyWindow(self.hdcamcon.device_title)
+                    cv2.destroyWindow(self.device_title)
                     # self.query_camera_status()       # expecting BUSY
                     self.camera_status = dcamcon.DCAMCAP_STATUS.READY       # this is done to indicate the class that the capture has stopped
                     
@@ -676,7 +704,7 @@ class CameraWorker(QObject):
                     break
         # self.stopped.emit()  # Emit the stopped signal when the loop exits
         # self.hdcamcon.set_propertyvalue(propid=dcamcon.DCAM_IDPROP.TRIGGERSOURCE, val=2)
-        cv2.destroyWindow(self.hdcamcon.device_title)
+        cv2.destroyWindow(self.device_title)
         # stop capture and release buffer
         print("Exiting start_capture()...")
         # self.query_camera_status()       # expecting BUSY; it is not stopped yet...
@@ -691,20 +719,26 @@ class CameraWorker(QObject):
             free_buffer : bool (Optional)
                 If True, then the function frees the buffer.
         """
-        # if the camera is capturing (BUSY), stop capture (READY)
-        if self.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
-            self.hdcamcon.stopcapture()
-            print("Capture stopped...")
-            self.query_camera_status()          # expecting READY
+        if not self.simulate:
+            try:
+                # if the camera is capturing (BUSY), stop capture (READY)
+                if self.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+                    self.hdcamcon.stopcapture()
+                    print("Capture stopped...")
+                    self.query_camera_status()          # expecting READY
 
-        # if the camera still holds buffer, free it if free_buffer is True
-        if self.camera_status == dcamcon.DCAMCAP_STATUS.READY and free_buffer:
-            self.hdcamcon.releasebuffer()
-            print("Buffer freed...")
-            self.query_camera_status()          # expecting STABLE
-            
-        print("Exiting stop_capture()...")
-        self.query_camera_status()
+                # if the camera still holds buffer, free it if free_buffer is True
+                if self.camera_status == dcamcon.DCAMCAP_STATUS.READY and free_buffer:
+                    self.hdcamcon.releasebuffer()
+                    print("Buffer freed...")
+                    self.query_camera_status()          # expecting STABLE
+                    
+                print("Exiting stop_capture()...")
+                self.query_camera_status()
+            except Exception as e:
+                print(f"Error: in Camcontrol.py > CameraWorker.stop_capture(): {e}")
+        else:
+            print("SimCam: stopped capture...")
     
     @pyqtSlot(float, float, float)
     def set_b(self, bx, by, bz):
@@ -721,8 +755,9 @@ class CameraWorker(QObject):
     def set_exposure(self, exposure):
         # incoming exposure in [s]
         self.exposure = exposure
-        self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.EXPOSURETIME, self.exposure)  # Set exposure on the instrument, exposure in ms
-        self.exposure = self.hdcamcon.get_propertyvalue(dcamcon.DCAM_IDPROP.EXPOSURETIME)
+        if not self.simulate:
+            self.hdcamcon.set_propertyvalue(dcamcon.DCAM_IDPROP.EXPOSURETIME, self.exposure)  # Set exposure on the instrument, exposure in ms
+            self.exposure = self.hdcamcon.get_propertyvalue(dcamcon.DCAM_IDPROP.EXPOSURETIME)
         print(f"Exposure set to: {self.exposure} [s]")
 
     def stop_worker(self):
@@ -752,6 +787,12 @@ class CameraThread(QThread):
         self.worker.start_capture()
 
     def stop(self):
+        # Disconnect signals
+        try:
+            self.worker.b_changed.disconnect()
+            self.worker.exposure_changed.disconnect()
+        except:
+            pass
         # self.worker.stop_worker()     # don't quit CameraWorker as it controls all the parameters of the acquisition
         self.worker.stop_capture()      # stop the live captue instead of stopping CameraWorker
         self.quit()

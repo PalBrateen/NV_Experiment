@@ -1,21 +1,30 @@
 # Copyright (c) 2015 SpinCore Technologies, Inc.
 # http://www.spincore.com
 #
-# This software is provided 'as-is', without any express or implied warranty. In no event will the authors be held liable for any damages arising from the use of this software.
-# Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it and redistribute it freely, subject to the following restrictions:
-# 1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgement in the product documentation would be appreciated but is not required.
-# 2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+# This software is provided 'as-is', without any express or implied warranty. 
+# In no event will the authors be held liable for any damages arising from the 
+# use of this software.
+#
+# Permission is granted to anyone to use this software for any purpose, 
+# including commercial applications, and to alter it and redistribute it
+# freely, subject to the following restrictions:
+#
+# 1. The origin of this software must not be misrepresented; you must not
+# claim that you wrote the original software. If you use this software in a
+# product, an acknowledgement in the product documentation would be appreciated
+# but is not required.
+# 2. Altered source versions must be plainly marked as such, and must not be
+# misrepresented as being the original software.
 # 3. This notice may not be removed or altered from any source distribution.
 
 import ctypes
+from enum import IntEnum
 
 PULSE_PROGRAM = 0
-FREQ_REGS = 1
-
-# Here, 'spinapi' is not a module but an object of CDLL type
+FREQ_REGS = 1  
+   
 try:
-	spinapi = ctypes.CDLL("spinapi64")     # ctypes=module; CDLL=class
-                                            # spinapi = CDLL object type of ctypes module
+	spinapi = ctypes.CDLL("spinapi64")
 except:
 	try:
 		spinapi = ctypes.CDLL("spinapi")
@@ -23,33 +32,33 @@ except:
 		print("Failed to load spinapi library.")
 		pass
 	
-def enum(**enums):
-    return type('Enum', (), enums)
+# def enum(**enums):
+#     return type('Enum', (), enums)
 		
-ns = 1e0
-us = 1e3
-ms = 1e6
-s = 1e9
+ns = 1.0
+us = 1000.0
+ms = 1000000.0
+s = 1000000000.0
 
 MHz = 1.0
 kHz = 0.001
 Hz = 0.000001
 		
 #Instruction enum
-Inst = enum(
-	CONTINUE = 0,
-	STOP = 1,
-	LOOP = 2,
-	END_LOOP = 3,
-	JSR = 4,
-	RTS = 5,
-	BRANCH = 6,
-	LONG_DELAY = 7,
-	WAIT = 8,
+class Inst:
+	CONTINUE = 0
+	STOP = 1
+	LOOP = 2
+	END_LOOP = 3
+	JSR = 4
+	RTS = 5
+	BRANCH = 6
+	LONG_DELAY = 7
+	WAIT = 8
 	RTI = 9
-)
-spinapi.pb_get_version.restype = (ctypes.c_char_p)
-spinapi.pb_get_error.restype = (ctypes.c_char_p)
+
+spinapi.pb_get_version.restype = (ctypes.c_char_p)      # artype = argument data type
+spinapi.pb_get_error.restype = (ctypes.c_char_p)        # restype = response data type
 
 spinapi.pb_count_boards.restype = (ctypes.c_int)
 
@@ -81,9 +90,9 @@ spinapi.pb_close.restype = (ctypes.c_int)
 
 
 spinapi.pb_inst_pbonly.argtype = (
-        ctypes.c_int,       #flags
-	ctypes.c_int,           #inst
-	ctypes.c_int,           #inst data
+        ctypes.c_int, #flags
+	ctypes.c_int, #inst
+	ctypes.c_int, #inst data
 	ctypes.c_double, #length (double)
 )
 spinapi.pb_inst_pbonly.restype = (ctypes.c_int)
@@ -165,17 +174,18 @@ def pb_stop_programming():
 	return spinapi.pb_stop_programming()
 
 def pb_inst_pbonly(*args):
-    t = list(args)      # Converting the arguments into a list
-    t[3] = ctypes.c_double(t[3])    # Argument 3 must be a double
-    args = tuple(t)                 # Convert the list into tuple (immutable)
-    return spinapi.pb_inst_pbonly(*args)
+        t = list(args)
+        #Argument 3 must be a double
+        t[3] = ctypes.c_double(t[3])
+        args = tuple(t)
+        return spinapi.pb_inst_pbonly(*args)
 
 def pb_inst_radio(*args):
-    t = list(args)
-    #Argument 10 must be a double
-    t[10] = ctypes.c_double(t[10])
-    args = tuple(t)
-    return spinapi.pb_inst_radio(*args)
+        t = list(args)
+        #Argument 10 must be a double
+        t[10] = ctypes.c_double(t[10])
+        args = tuple(t)
+        return spinapi.pb_inst_radio(*args)
 	
 def pb_inst_dds2(*args):
 	t = list(args)

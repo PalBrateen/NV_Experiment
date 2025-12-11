@@ -7,7 +7,7 @@ Set the value of specified prperty
 """
 
 __copyright__ = 'Copyright (C) 2024 Hamamatsu Photonics K.K.'
-
+import numpy as np
 from dcam import *
 # ti control DCAM functions
 
@@ -682,7 +682,351 @@ class Dcamcon:
         
         return res
 
-def dcamcon_init():
+class Dcamcon_sim:
+    """Simulate a DCAM-API.
+    Functions that are interactive and easy to control DCAM-API.
+    This class is used for the sample of camera function
+    """
+
+    def __init__(self):
+        self.deviceindex = -1
+        # Dcam instance
+        self.dcam : Dcam = None
+        # MODEL + CAMERAID + BUS. for OpenCV window title and camera list
+        self.device_title = None
+        # number of DCAM frame buffers
+        self.__number_of_frames = 10
+
+    def close(self):
+        """Close Simulated Dcam.
+        Call Dcam.close() and set None to self.dcam
+
+        Returns:
+            bool: result
+        """
+        print("SimCam: closed!")
+        # if self.dcam is None:
+        #     return True
+        
+        # if not self.dcam.dev_close():
+        #     print('-NG: Dcam.dev_close() failed with error {}'.format(self.dcam.lasterr().name))
+        #     return False
+        
+        # self.dcam = None
+        return True
+        
+    def allocbuffer(self, number_of_frames):
+        """Simulate `allocbuff()`.
+        Allocate buffer with `Dcam.buf_alloc()`.
+        If success, set value is kept by `self.__number_of_frames`.
+
+        Args:
+            number_of_frames (int): Value to set for Dcam.buf_alloc()
+        
+        Returns:
+            bool: result
+        """
+        print(f"SimCam: Buffer allocated: {number_of_frames} frames")
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+
+        # if not self.dcam.buf_alloc(number_of_frames):
+        #     print('-NG: Dcam.buf_alloc({}) failed with error {}'.format(number_of_frames, self.dcam.lasterr().name))
+        #     return False
+        
+        self.__number_of_frames = number_of_frames
+        return True
+    
+    def releasebuffer(self):
+        """Simulate `releasebuffer()`.
+        Release allcated buffer with Dcam.buf_release().
+
+        Returns:
+            bool: result
+        """
+        print("SimCam: Buffer released")
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # if not self.dcam.buf_release():
+        #     print('-NG: Dcam.buf_release() failed with error {}'.format(self.dcam.lasterr().name))
+        #     return False
+        
+        return True
+    
+    def startcapture(self, is_sequence = True):
+        """Simulate `start_capture()`.
+        Start capturing with Dcam.cap_start().
+        If failure, if shows error message.
+
+        Args:
+            is_sequence (bool): if True, sequential capturing, otherwise snap capturing
+        
+        Returns:
+            bool: result
+        """
+        print("SimCam: Capture started..")
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # if not self.dcam.cap_start(is_sequence):
+        #     print('-NG: Dcam.cap_start() failed with error {}'.format(self.dcam.lasterr().name))
+        #     return False
+        
+        return True
+    
+    def stopcapture(self):
+        """Simulate `stop_capture()`.
+        Stop capturing with Dcam.cap_stop().
+        If failure, it shows error message
+
+        Returns:
+            bool: result
+        """
+        print("SimCam: Capture stopped...")
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # if not self.dcam.cap_stop():
+        #     print('-NG: Dcam.cap_stop() failed with error {}'. format(self.dcam.lasterr().name))
+        #     return False
+        
+        return True
+    
+    def is_capstatus_ready(self):
+        """Simulate `is_capstatus_ready()`.
+        Call Dcam.cap_status() and check whether the value is READY or not
+
+        Returns:
+            bool: result 
+        """
+        print("SimCam: capstatus_ready..")
+        capstatus = DCAMCAP_STATUS.READY
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # capstatus = self.dcam.cap_status()
+        # if capstatus is False:
+        #     print('-NG: Dcam.cap_status() failed with error {}'.format(self.dcam.lasterr().name))
+        #     return False
+        
+        return capstatus == DCAMCAP_STATUS.READY
+    
+    def firetrigger(self):
+        """Simulate `firetrigger()`.
+        Fire software trigger when TRIGGERSOURCE is SOFTWARE.
+
+        Returns:
+            bool: result
+        """
+        print("SimCam: firetrigger()")
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # if not self.dcam.cap_firetrigger():
+        #     print('-NG: Dcam.cap_firetrigger() failed with error {}'.format(self.dcam.lasterr().name))
+        #     return False
+        
+        return True
+    
+    def wait_capevent_frameready(self, timeout_millisec):
+        """Simulate `wait_capevent_frameready()`.
+        Wait for frameready event for amount of time specified by timeout_millisec.
+        If frameready event happened, it returns True. Otherwise it returns DCAMERR.
+
+        Args:
+            timeout_millisec (int): timeout time for waiting frameready event in ms
+        
+        Returns:
+            bool: True if success
+            DCAMERR: Dcam.lasterr() if failure 
+        """
+
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # if not self.dcam.wait_capevent_frameready(timeout_millisec):
+        #     return self.dcam.lasterr()
+        
+        return True
+    
+    def get_lastframedata(self):
+        """Simulate `get_lastframedata()`.
+        Access last frame data with Dcam.buf_getlastframedata().
+        If success, it returns Numpy ndarray stored last image data.
+        If failure, it returns False
+
+        Returns:
+        --------
+            - NumPy ndarray: NumPy ndarray stored image if success
+            - bool: False if failure
+        """
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # ret = self.dcam.buf_getlastframedata()
+        # if ret is False:
+        #     print('-NG: Dcam.buf_getlastframedata() failed with error {}'.format(self.dcam.lasterr().name))
+        #     return False
+        ret = np.random.rand(2048, 2048)
+        
+        return ret
+    
+    def get_transferinfo(self):
+        """Get transfer status.
+        Get the total number of images captured and the frame index of the last captured.
+
+        Returns:
+            (int, int): index of the last captured frame, number of captured frames
+            bool: False if failure
+        """
+        if self.dcam is None:
+            print('-NG: Dcamcon is not opened')
+            return False
+        
+        captransferinfo = self.dcam.cap_transferinfo()
+        if captransferinfo is False:
+            print('-NG: Dcam.cap_transferinfo() failed with error {}'.format(self.dcam.lasterr().name))
+            return False
+
+        if captransferinfo.nFrameCount < 1:
+            print('-NG: There are no images retrieved.')
+            return False
+        
+        return (captransferinfo.nNewestFrameIndex, captransferinfo.nFrameCount)
+
+    def save_rawimages(self, prefix):
+        """Save acquired images as raw.
+        Save acquired and retained images as raw data.
+        The output file name is "{prefix} - {frameindex}.raw"
+        "frameindex" starts at 1 and is numbered from the oldest image.
+
+        Args:
+            prefix (string): prefix of output filename
+        
+        Returns:
+            bool: result
+        """
+        if self.dcam is None:
+            print('-NG: Dcamcon is not opened')
+            return False
+        
+        captransferinfo = self.dcam.cap_transferinfo()
+        if captransferinfo is False:
+            print('-NG: Dcam.cap_transferinfo() failed with error {}'.format(self.dcam.lasterr().name))
+            return False
+        
+        if captransferinfo.nFrameCount < 1:
+            print('-NG: There are no images retrieved.')
+            return False
+        
+        if captransferinfo.nFrameCount > self.__number_of_frames:
+            number_of_images = self.__number_of_frames
+            start_frameindex = (captransferinfo.nNewestFrameIndex + 1) % self.__number_of_frames
+        else:
+            number_of_images = captransferinfo.nFrameCount
+            start_frameindex = 0
+        
+        for i in range(0, number_of_images, 1):
+            index = (start_frameindex + i) % self.__number_of_frames
+            datai = self.dcam.buf_getframedata(index)
+            filename = '{} - {}.raw'.format(prefix, i+1)
+            datai.tofile(filename)
+        
+        return True
+    
+    def get_propertyvalue(self, propid:IntEnum, showerrmsg=True):
+        """Simulate `get_propertyvalue()`.
+        Get property value with Dcam.prop_getvalue()
+        If showerrmsg is True, it shows error message when Dcam.prop_getvalue() return False.
+        'showerrmsg' defaults to True. Set showerrmsg to False when it is meaningful that it is an error. 
+
+        Args:
+            propid (IntEnum): DCAM_IDPROP IntEnum
+            showerrmsg (bool): if True, print error message.
+        
+        Returns:
+            double: get value if success
+            bool: False if failure            
+        """
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # propvalue = self.dcam.prop_getvalue(propid.value)
+        # if propvalue is False:
+        #     if showerrmsg:
+        #         print('-NG: Dcam.prop_getvalue({}) failed with error {}'.format(propid.name, self.dcam.lasterr().name))
+        #     return False
+        
+        # return propvalue
+        pass
+    
+    def set_propertyvalue(self, propid:IntEnum, val):
+        """Simulate `set_propertyvalue()`.
+        Set property value with Dcam.prop_setvalue().
+        It shows error message when Dcam.prop_setvalue() return False
+
+        Args:
+            propid (IntEnum): DCAM_IDPROP IntEnum. property ID.
+            val (double): set value
+        
+        Returns:
+            bool: result
+        """
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # if not self.dcam.prop_setvalue(propid, val):
+        #     print('-NG: Dcam.prop_setvalue({}, {}) failed with error {}'.format(propid.name, val, self.dcam.lasterr().name))
+        #     return False
+        
+        return True
+    
+    def setget_propertyvalue(self, propid:IntEnum, val):
+        """Simulate: `setget_propertyvalue()`.
+        Set and get property value with Dcam.prop_setgetvalue().
+        If success, it returns the 'get value'. If failure, it returns False
+
+        Args:
+            propid (IntEnum): DCAM_IDPROP IntEnum. property ID
+            val (double): set value
+        
+        Returns:
+            double: get value if success.
+            bool: False if failure.
+        """
+        # if self.dcam is None:
+        #     print('-NG: Dcamcon is not opened')
+        #     return False
+        
+        # res = self.dcam.prop_setgetvalue(propid, val)
+        # if res is False:
+        #     print('-NG: Dcam.prop_setgetvalue({}, {}) failed with error {}'.format(propid.name, val, self.dcam.lasterr().name))
+        #     return False
+        
+        # return res
+        pass
+
+    def prompt_propvalue(self, propid, restrictmode=PromptRestrictMode.No, restrictval=None):
+        pass
+    
+    def _prompt_longpropvalue_stack(self, propid, clipmax=False):
+        pass
+    
+    def prompt_propvalue_subarray(self):
+        pass
+    
+def dcamcon_init(simulate=False):
     """Initialize DCAM-API and make device list.
     Initialize DCAM-API and make device list.
 
@@ -693,107 +1037,132 @@ def dcamcon_init():
     Return:
         bool: result of initialization
     """
-    global called_dcamapi_init
+    global called_dcamapi_init, dcamcon_list
     if called_dcamapi_init:
         # dcamapi_init() is already called
         print("Already initialized..")
         return True
     
     print('Calling Dcamapi.init()')
-    if not Dcamapi.init():
-        print('-NG: Dcamapi.init() failed with error {}'.format(Dcamapi.lasterr().name))
-        # should call Dcamapi.uninit to call Dcamapi.init() again if if fails
-        Dcamapi.uninit()
-        return False
-    
-    called_dcamapi_init = True
-
-    # check number of detected devices.
-    cameracount = Dcamapi.get_devicecount()
-    if cameracount <= 0:
-        print('-NG: Dcamapi.init() succeeded but no device is available.')
-        return False
-    
-    # update device list
-    global dcamcon_list
-    dcamcon_list = []
-    for icamera in range(cameracount):
-        dcam = Dcam(icamera)
-        device_title = '#[{}]: '.format(icamera)
-
-        # check model string of the device
-        model = dcam.dev_getstring(DCAM_IDSTR.MODEL)
-        text = ''
-        if model is False:
-            text = 'NO MODEL'
-        else:
-            text = 'MODEL={}'.format(model)
+    if not simulate:
+        if not Dcamapi.init():
+            print('-NG: Dcamapi.init() failed with error {}'.format(Dcamapi.lasterr().name))
+            # should call Dcamapi.uninit to call Dcamapi.init() again if if fails
+            Dcamapi.uninit()
+            return False
         
-        device_title += text
+        called_dcamapi_init = True
 
-        # check cameraid string of the device
-        cameraid = dcam.dev_getstring(DCAM_IDSTR.CAMERAID)
-        text = ''
-        if cameraid is False:
-            text = ', NO CAMERAID'
-        else:
-            text = ', CAMERAID={}'.format(cameraid)
+        # check number of detected devices.
+        cameracount = Dcamapi.get_devicecount()
+        if cameracount <= 0:
+            print('-NG: Dcamapi.init() succeeded but no device is available.')
+            return False
         
-        device_title += text
-
-        # check bus string of the device
-        bus = dcam.dev_getstring(DCAM_IDSTR.BUS)
-        text = ''
-        if bus is False:
-            text = ', NO BUS'
-        else:
-            text = ', BUS={}'.format(bus)
+        # update device list
         
-        device_title += text
+        dcamcon_list = []
+        for icamera in range(cameracount):
+            dcam = Dcam(icamera)
+            device_title = '#[{}]: '.format(icamera)
 
-        # create and initialize Dcamcon instance
-        my = Dcamcon()
-        my.iCamera = icamera    # is this a new attribute??
-        my.device_title = device_title
-        my.dcam = None
+            # check model string of the device
+            model = dcam.dev_getstring(DCAM_IDSTR.MODEL)
+            text = ''
+            if model is False:
+                text = 'NO MODEL'
+            else:
+                text = 'MODEL={}'.format(model)
+            
+            device_title += text
 
-        # append to dcamcon_list
-        dcamcon_list.append(my)
-    
-    print("DCAM-API Init'd..")
+            # check cameraid string of the device
+            cameraid = dcam.dev_getstring(DCAM_IDSTR.CAMERAID)
+            text = ''
+            if cameraid is False:
+                text = ', NO CAMERAID'
+            else:
+                text = ', CAMERAID={}'.format(cameraid)
+            
+            device_title += text
+
+            # check bus string of the device
+            bus = dcam.dev_getstring(DCAM_IDSTR.BUS)
+            text = ''
+            if bus is False:
+                text = ', NO BUS'
+            else:
+                text = ', BUS={}'.format(bus)
+            
+            device_title += text
+
+            # create and initialize Dcamcon instance
+            my = Dcamcon()
+            my.iCamera = icamera    # is this a new attribute??
+            my.device_title = device_title
+            my.dcam = None
+
+            # append to dcamcon_list
+            dcamcon_list.append(my)
+            print("DCAM-API Init'd..")
+    else:       
+        called_dcamapi_init = True
+
+        # check number of detected devices.
+        cameracount = 1
+        
+        # update device list
+        dcamcon_list = []
+        for icamera in range(cameracount):
+            dcam = Dcam(icamera)
+            device_title = 'SimCam'
+
+            # create and initialize simulated Dcamcon instance
+            my = Dcamcon_sim()
+            my.iCamera = icamera
+            my.device_title = device_title
+            my.dcam = None
+
+            # append to dcamcon_list
+            dcamcon_list.append(my)
+            
+        print("SimCam: INIT...")            
     return True
 
-def dcamcon_uninit():
+def dcamcon_uninit(simulate=False):
     """Clear device list and uninitialize DCAM-API.
     Clear device list and uninitialize DCAM-API
 
     """
     # close device
     global dcamcon_list
-    for my in dcamcon_list:
-        if my.dcam is None:
-            # not opened or closed
-            continue
+    if not simulate:
+        for my in dcamcon_list:
+            if my.dcam is None:
+                # not opened or closed
+                continue
+            
+            my.stopcapture()    # Stop capturing. No effect if already stopped
+
+            if my.is_capstatus_ready():
+                my.releasebuffer()
+
+            my.close()
+            my.dcam = None
         
-        my.stopcapture()    # Stop capturing. No effect if already stopped
+        # clear device list
+        dcamcon_list.clear()
 
-        if my.is_capstatus_ready():
-            my.releasebuffer()
+        # uninitialize DCAM-API
+        global called_dcamapi_init
+        if called_dcamapi_init:
+            Dcamapi.uninit()
+            print("\x1b[38;2;10;250;50mDCAM-API uninit'd..\x1b[0m")
+            called_dcamapi_init = False
+    else:
+        print("SimCam: \x1b[38;2;10;250;50mDCAM-API uninit'd..\x1b[0m")
 
-        my.close()
-        my.dcam = None
-    
-    # clear device list
-    dcamcon_list.clear()
-
-    # uninitialize DCAM-API
-    global called_dcamapi_init
-    if called_dcamapi_init:
-        Dcamapi.uninit()
-        print("\x1b[38;2;10;250;50mDCAM-API uninit'd..")
-        called_dcamapi_init = False
-
-def dcamcon_choose_and_open():
+def dcamcon_choose_and_open(simulate=False):
     """Choose device.
     Choose DCAM device from dcamcon_list and Dcamcon instance
 
@@ -801,50 +1170,58 @@ def dcamcon_choose_and_open():
         Dcamcon: Dcamcon instance of opened device. It returns None when open is failed.
     """
     global dcamcon_list
-    devicecount = len(dcamcon_list)
-    
-    if devicecount <= 0:
-        print('-NG: No device is available.')
-        return None
-    
-    idevice = 0
-    if devicecount == 1:
-        print(dcamcon_list[0].device_title)
-    else:
-        # mean devicecount > 1
-
-        # print device list
-        devicelist = ''
-        for dcamcon in dcamcon_list:
-            devicelist += devicelist + dcamcon.device_title + '\n'
-            # seems that above statement has an extra +
+    if not simulate:
+        devicecount = len(dcamcon_list)
         
-        print(devicelist)
-
-        # choose device index
-        fmt = '\n# Choose device index between 0 - {}. [default] is 0\n '
-        prompt = fmt.format(devicecount - 1)
-        while True:
-            instr = input(prompt)
-            if instr == '':
-                # default index
-                idevice = 0
-                break
-            
-            try:
-                idevice = int(instr)
-            except ValueError:
-                idevice = -1
-            
-            if (idevice >= 0 and
-                idevice < devicecount):
-                break
+        if devicecount <= 0:
+            print('-NG: No device is available.')
+            return None
         
-    dcam = Dcam(idevice)
-    if not dcam.dev_open():
-        print('-NG: Dcam.dev_open() failed with error {}'.format(dcam.lasterr().name))
-        return None
-    
-    dcamcon_list[idevice].dcam = dcam
-    return dcamcon_list[idevice]
+        idevice = 0
+        if devicecount == 1:
+            print(dcamcon_list[0].device_title)
+        else:
+            # mean devicecount > 1
 
+            # print device list
+            devicelist = ''
+            for dcamcon in dcamcon_list:
+                devicelist += devicelist + dcamcon.device_title + '\n'
+                # seems that above statement has an extra +
+            
+            print(devicelist)
+
+            # choose device index
+            fmt = '\n# Choose device index between 0 - {}. [default] is 0\n '
+            prompt = fmt.format(devicecount - 1)
+            while True:
+                instr = input(prompt)
+                if instr == '':
+                    # default index
+                    idevice = 0
+                    break
+                
+                try:
+                    idevice = int(instr)
+                except ValueError:
+                    idevice = -1
+                
+                if (idevice >= 0 and
+                    idevice < devicecount):
+                    break
+            
+        dcam = Dcam(idevice)
+        if not dcam.dev_open():
+            print('-NG: Dcam.dev_open() failed with error {}'.format(dcam.lasterr().name))
+            return None
+        
+        dcamcon_list[idevice].dcam = dcam
+        return dcamcon_list[idevice]
+    
+    else:   # simulated camera
+        devicecount = 1
+        idevice = 0
+        dcam = Dcam(idevice)
+        
+        dcamcon_list[idevice].dcam = dcam
+        return dcamcon_list[idevice]

@@ -22,26 +22,27 @@ clk_cyc = 1e3/PBclk # Time resolution in ns
 # See that all the experimental parameters are Python mutable object types
 
 #%% Microwave scan parameters:----------------------------------------------------
-MW_power = 8          # Microwave power output from SRS(dBm)
-MW_freq = 2785.5 /1e3*GHz
-t_duration = 108 *ns         # Duration of pi-pulse
+MW_power = 5          # Microwave power output from SRS(dBm)
+MW_freq = 2846.7 /1e3*GHz
+t_duration = 215 *ns         # Duration of pi-pulse
 # The duration of pi-by-2 pulse is calculated in 'sequenceControl'
 
-startinterval = 0.6 * us     # Start interval (in nanoseconds)
-endinterval = 500 * us      # End interval (in nanoseconds)
-step_size = 1000 * ns
+startinterval = 0.03 * us     # Start interval (in nanoseconds)
+endinterval = 1000 * us      # End interval (in nanoseconds)
+step_size = 500 * ns
 N_scanPts = round((endinterval - startinterval)/step_size + 1)
 # N_scanPts = 1501              # Number of pulse length steps
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 20 *us                    # AOM pulse duration (ns)
-ro_delay = 300 *ns      # Readout delay (ns)
+t_AOM = 50 *us                    # AOM pulse duration (ns)
+ro_delay = 500 *ns      # Readout delay (ns)
 # AOM_lag = (1500+500) *ns
-AOM_lag = 800 *ns
-MW_lag = 150 * ns
+# AOM_lag = 800 *ns
+AOM_lag = 780 *ns       # confocal setup
+MW_lag = 80 * ns
 
-Nsamples = 1                  # Number of FL ssamples to take at each pulse length poin
-Nruns = 1                        # Number of averaging runs to do
+Nsamples = 1000                  # Number of FL ssamples to take at each pulse length poin
+Nruns = 3                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------
 # Contrast mode

@@ -18,21 +18,22 @@
 
 # To temporarily disable channel priority:
 # conda config --set channel_priority flexible
+
 # conda install console_shortcut powershell_shortcut -c anaconda
 # conda config --set channel_priority strict
 
 # To avoid accidentally using the base use:
 # conda config --set auto_activate_base false   # Disable auto-activation of base environment
-name: NV_py3.11
+name: NV_py3.8.8
 channels:
   - conda-forge
   - defaults
 dependencies:
   # python
-  - python>=3.9,<3.12
+  - python>=3.8.8
 
   # spyder
-  - spyder<6.0.0
+  - spyder
 
   # Jupyter
   - ipykernel
@@ -51,42 +52,23 @@ dependencies:
   - trackpy
   - pims
   - h5py
-  - allantools
+  #- allantools
 
   # hardware interface
   - pyvisa
-  - nidaqmx-python>=1.0
+  - nidaqmx-python
   - python-decouple   # required by nidaqmx-python
   #- hightime    # this is from pip: pip install hightime
   - tzlocal
   - pylablib
 
   # GUI and visual
-  - pyqt
-  - opencv
+  - pyqt=5.9.2
+  - opencv=4.0.1
   
   # Utilities
   - keyboard
   - screeninfo
   - colored
 
-  # conda create -n test_env1 python>=3.9 python<3.12 numpy scipy scikit-image pyqt pyqtgraph pyvisa nidaqmx-python>=1.0 vitables matplotlib seaborn spyder jupyter jupyterlab ipykernel trackpy pims dask h5py opencv --dry-run
-
-  # Spyder Shortcut
-  # Target:
-  # C:\Users\Smart\miniconda3\pythonw.exe
-  # C:\Users\Smart\miniconda3\cwp.py
-  # C:\Users\Smart\miniconda3\envs\NV_py3.8
-  # C:\Users\Smart\miniconda3\envs\NV_py3.8\pythonw.exe
-  # C:\Users\Smart\miniconda3\envs\NV_py3.8\Scripts\spyder-script.py --new-instance
-  # Start in:
-  # "C:\Users\Smart\Documents\Python Scripts"
-  # Comment:
-  # Spyder (<env name>)
-
-  # Jupyter notebook shortcut
-  # C:\Users\Smart\miniconda3\python.exe C:\Users\Smart\miniconda3\cwp.py C:\Users\Smart\miniconda3\envs\NV_py3.8 C:\Users\Smart\miniconda3\envs\NV_py3.8\python.exe C:\Users\Smart\miniconda3\envs\NV_py3.8\Scripts\jupyter-notebook-script.py "%USERPROFILE%/"
-  # Start in:
-  # %HOMEPATH%
-  # Comment:
-  # Jupyter Notebook (<env_name>)
+  # test environments using "conda create -n test_env1 python>=3.9 python<3.12 numpy scipy scikit-image pyqt pyqtgraph pyvisa nidaqmx-python>=1.0 vitables matplotlib seaborn spyder jupyter jupyterlab ipykernel trackpy pims dask h5py opencv --dry-run"

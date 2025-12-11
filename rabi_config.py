@@ -23,22 +23,27 @@ clk_cyc = 1e3/PBclk # Time resolution in ns
 
 #%% Microwave scan parameters:----------------------------------------------------
 startPulseDuration =  10 *ns      # Start pulse duration (in nanoseconds)
-endPulseDuration = 500 *ns      # End pulse duration (in nanoseconds)
-step_size = 2*ns
+endPulseDuration = 750 *ns      # End pulse duration (in nanoseconds)
+step_size = 5 *ns
 N_scanPts = round((endPulseDuration - startPulseDuration)/step_size + 1)
 # N_scanPts = 5              # Number of pulse length steps
 MW_power = 8                 # Microwave power output from SRS(dBm)
-MW_freq = 2870 /1e3 * GHz     # Microwave frequency (Hz)
+MW_freq = 3.026 * GHz     # Microwave frequency (Hz)
 # MW_freq = 2516 /1e3 * GHz     # Microwave frequency (Hz)
 
 #%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 20 *us                    # AOM pulse duration (ns)
-ro_delay = (1800)*ns      # Readout delay (ns)
+#t_AOM = 15 *us                    # AOM pulse duration (not_optimized_initial_pulse)
+t_AOM = 3 *ms                    # AOM pulse duration (optimized_initial_pulse)
+# ro_delay = (1800)*ns      # Readout delay (ns)
+ro_delay = 500 *ns          # confocal ???
+
 # AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
 AOM_lag = (800)*ns          # for camera
-MW_lag = 150*ns
+# AOM_lag = 780 *ns            # for APD in confocal
 
-Nsamples = 2    # Number of signal frames to take at each scanpt
+MW_lag = 80*ns
+
+Nsamples = 500    # Number of signal frames to take at each scanpt
 Nruns = 1                        # Number of averaging runs to do
 
 #%% Plotting options--------------------------------------------------------------

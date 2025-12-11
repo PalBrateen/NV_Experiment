@@ -6,7 +6,7 @@ from SGcontrol import Hz, kHz, MHz, GHz
 import os
 import numpy as np
 from time import localtime, strftime
-from connectionConfig import PBclk, laser, start_trig, samp_clk, MW, conv_clk
+from connectionConfig import PBclk, laser, start_trig, samp_clk, MW#, conv_clk
 
 clk_cyc = 1e3/PBclk         #in ns; ONE CLOCK CYCLE
 
@@ -14,19 +14,29 @@ clk_cyc = 1e3/PBclk         #in ns; ONE CLOCK CYCLE
 #%% USER INPUT
 
 # Pulse sequence parameters:----------------------------------------------------
-t_AOM = 5*us                # Duration of AOM pulse
-AOM_lag = (830)*ns         # Time lag involved in the pulsing of the AOM
+t_AOM = 50*us                # Duration of AOM pulse
+
+# AOM_lag = (1450)*ns     # first parameter = AOM+Preamp lag, 2nd parameter = rise/fall time of the signal as seen in PMT-Preamp-DAQ
+# AOM_lag = (800)*ns          # for camera
+AOM_lag = 900 *ns            # for APD in confocal
+
+MW_lag = 150*ns
+
+t_pi = 500*ns               # Duration of pi pulse (in ns)
+MW_power = 5                 # Microwave power output from SRS(dBm)
+MW_freq = 2846.7 /1e3 * GHz     # Microwave frequency (Hz)
+
 # readout_delay = 350*ns
 # '0.8us','1us','1.2us','2us','5us','10us','50us','100us','500us','1ms','2ms','5ms'
-interval = 10 *us
+# interval = 10 *us
 # start_delay = 1*us        # Time from which the pulse sequence starts
 Nsamples = 100              # Number of FL samples to take at each scan point
 Nruns = 1                    # Number of averaging runs to do
 
 # Readout Delay scan
-start_rodelay = -AOM_lag
-end_rodelay = 6*us
-step_size = 100*ns
+start_rodelay = 0.0*ns
+end_rodelay = 10*us
+step_size = 2*ns
 N_scanPts = round((end_rodelay - start_rodelay)/step_size + 1)
 
 # Plotting options--------------------------------------------------------------
@@ -51,20 +61,21 @@ scannedParam = np.linspace(start_rodelay, end_rodelay, N_scanPts, endpoint=True)
 sequence = 'rodelay'                 #Sequence string
 scanStartName = 'start_delay'         #Scan start Name
 scanEndName = 'end_delay'             #Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk, 'Samp\nCLK':samp_clk, 'MW':MW, 'Laser':laser,
+PBchannels = {'Samp\nCLK':samp_clk, 'MW':MW, 'Laser':laser,
               'Start\nTrig':start_trig}
-sequenceArgs = [t_AOM, AOM_lag, interval]         #Sequence args
+PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
+sequenceArgs = [t_AOM, AOM_lag, MW_lag]         #Sequence args
 
 # dateTimeStr = strftime("%Y-%m-%d_%Hh%Mm%Ss", localtime())       #Make save file path
 # dataFileName = savePath + saveFileName+ dateTimeStr +".txt"
 # paramFileName = savePath + saveFileName+dateTimeStr+'_PARAMS'+".txt"
-formattingSaveString = " %s\t%d\n %s\t%d\n %s\t%d\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n"      #" %s\t%r\n %s\t%r\n"           #Param file save settings
-expParamList = ['N_scanPts:',N_scanPts, 'Nruns:',Nruns, 'Nsamples:',Nsamples, 'start_delay:',scannedParam[0], 'end_delay:',scannedParam[-1], 't_AOM:',t_AOM, 'AOM_lag:',AOM_lag, 'Delay_Interval:',interval]      # 'shotByShotNorm:',shotByShotNormalization, 'randomize:',randomize] #,'saveSpacing_inScanPts:',saveSpacing_inScanPts,'saveSpacing_inAverages:',saveSpacing_inAverages]           # 11 parameters
+formattingSaveString = " %s\t%d\n %s\t%d\n %s\t%d\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n %s\t%f\n"      #" %s\t%r\n %s\t%r\n"           #Param file save settings
+expParamList = ['N_scanPts:',N_scanPts, 'Nruns:',Nruns, 'Nsamples:',Nsamples, 'start_delay:',scannedParam[0], 'end_delay:',scannedParam[-1], 't_AOM:',t_AOM, 'AOM_lag:',AOM_lag, 'MW_lag:',MW_lag, 'MW_power:',MW_power, 'MW_freq:',MW_freq, 't_pi:', t_pi]      # 'shotByShotNorm:',shotByShotNormalization, 'randomize:',randomize] #,'saveSpacing_inScanPts:',saveSpacing_inScanPts,'saveSpacing_inAverages:',saveSpacing_inAverages]           # 11 parameters
 
 def updateSequenceArgs():
-    sequenceArgs = [t_AOM, AOM_lag, interval]
+    sequenceArgs = [t_pi, t_AOM, AOM_lag, MW_lag]
     return sequenceArgs
 
 def updateExpParamList():
-    expParamList = ['N_scanPts:',N_scanPts, 'Nruns:',Nruns, 'Nsamples:',Nsamples, 'start_delay:',scannedParam[0], 'end_delay:',scannedParam[-1], 't_AOM:',t_AOM, 'AOM_lag:',AOM_lag, 'Delay_Interval:',interval]       # 'shotByShotNorm:',shotByShotNormalization, 'randomize:',randomize] #,'saveSpacing_inScanPts:',saveSpacing_inScanPts,'saveSpacing_inAverages:',saveSpacing_inAverages]           # 11 parameters
+    expParamList = ['N_scanPts:',N_scanPts, 'Nruns:',Nruns, 'Nsamples:',Nsamples, 'start_delay:',scannedParam[0], 'end_delay:',scannedParam[-1], 't_AOM:',t_AOM, 'AOM_lag:',AOM_lag, 'Delay_Interval:',MW_lag, 'MW_power:',MW_power, 'MW_freq:',MW_freq, 't_pi:', t_pi]       # 'shotByShotNorm:',shotByShotNormalization, 'randomize:',randomize] #,'saveSpacing_inScanPts:',saveSpacing_inScanPts,'saveSpacing_inAverages:',saveSpacing_inAverages]           # 11 parameters
     return expParamList
