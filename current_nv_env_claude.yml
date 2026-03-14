@@ -23,16 +23,18 @@
 
 # To avoid accidentally using the base use:
 # conda config --set auto_activate_base false   # Disable auto-activation of base environment
-name: NV_py3.11
+
+name: NV_py3.12     # check the name
 channels:
   - conda-forge
   - defaults
 dependencies:
   # python
-  - python>=3.9,<3.12
+  - python<=3.13.5    # check version limits
 
   # spyder
-  - spyder<6.0.0
+  - spyder
+  - spyder-kernels
 
   # Jupyter
   - ipykernel
@@ -53,6 +55,9 @@ dependencies:
   - h5py
   - allantools
 
+  # GPU
+  - cupy
+
   # hardware interface
   - pyvisa
   - nidaqmx-python>=1.0
@@ -62,7 +67,7 @@ dependencies:
   - pylablib
 
   # GUI and visual
-  - pyqt
+  - pyside6
   - opencv
   
   # Utilities
@@ -70,7 +75,12 @@ dependencies:
   - screeninfo
   - colored
 
-  # conda create -n test_env1 python>=3.9 python<3.12 numpy scipy scikit-image pyqt pyqtgraph pyvisa nidaqmx-python>=1.0 vitables matplotlib seaborn spyder jupyter jupyterlab ipykernel trackpy pims dask h5py opencv --dry-run
+  - pip
+  - pip:
+    - zhinst
+    - snapi
+    - hightime
+  # conda create -n test_env1 python<3.13 numpy scipy scikit-image pyside6 pyqtgraph pyvisa nidaqmx-python>=1.0 vitables matplotlib seaborn spyder jupyter jupyterlab ipykernel trackpy pims dask h5py opencv qtconsole spyder-kernel --dry-run
 
   # Spyder Shortcut
   # Target:

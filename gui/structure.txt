@@ -1,0 +1,63 @@
+gui
+├── dialogs
+│   └── __init__.py
+├── gui_experiment_controller.py
+├── main.py
+├── main_window.py
+├── resource_manager.py
+├── structure.csv
+├── structure.txt
+├── styles
+│   ├── colors.py
+│   ├── dark_theme.qss
+│   ├── __init__.py
+│   └── __pycache__
+│       ├── colors.cpython-312.pyc
+│       └── __init__.cpython-312.pyc
+├── utils
+│   ├── fft_processor.py
+│   ├── unit_converter.py
+│   ├── __init__.py
+│   └── __pycache__
+│       ├── fft_processor.cpython-312.pyc
+│       ├── unit_converter.cpython-312.pyc
+│       └── __init__.cpython-312.pyc
+├── widgets
+│   ├── instrument_status_card.py
+│   ├── ipython_console_widget.py
+│   ├── live_plot_widget.py
+│   ├── monitor_tab.py
+│   ├── multi_sweep_builder.py
+│   ├── parameter_editor.py
+│   ├── quick_fit_panel.py
+│   ├── scan_selector.py
+│   ├── sweep_builder.py
+│   ├── __init__.py
+│   └── __pycache__
+│       ├── instrument_status_card.cpython-312.pyc
+│       ├── ipython_console_widget.cpython-312.pyc
+│       ├── ipython_console_widget.cpython-313.pyc
+│       ├── live_plot_widget.cpython-312.pyc
+│       ├── monitor_tab.cpython-312.pyc
+│       ├── multi_sweep_builder.cpython-312.pyc
+│       ├── parameter_editor.cpython-312.pyc
+│       ├── quick_fit_panel.cpython-312.pyc
+│       ├── scan_selector.cpython-312.pyc
+│       ├── sweep_builder.cpython-312.pyc
+│       ├── __init__.cpython-312.pyc
+│       └── __init__.cpython-313.pyc
+├── windows
+│   ├── base_experiment_window.py
+│   ├── esr_window.py
+│   ├── experiment_window.py
+│   └── __pycache__
+│       ├── base_experiment_window.cpython-312.pyc
+│       ├── esr_window.cpython-312.pyc
+│       └── experiment_window.cpython-312.pyc
+├── __init__.py
+└── __pycache__
+    ├── main.cpython-312.pyc
+    ├── main_window.cpython-312.pyc
+    ├── resource_manager.cpython-312.pyc
+    ├── __init__.cpython-312.pyc
+    └── __init__.cpython-313.pyc

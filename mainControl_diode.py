@@ -24,7 +24,7 @@ trial_run = ['n','n']       # 1st=SG, 2nd=PB, 3rd=ametek
 seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
-plotPulseSequence = False
+plotPulseSequence = True
 
 load_pb_all_params = True if 'train' in expCfgFile else False
 reload_pb = False if 't1ms0_train' in expCfgFile else True
@@ -113,7 +113,7 @@ def close_all(sg=None, ao_task=None, ai_task=None):
         # else:
         #     pb.run_only_daq(t_align_dc *ms)
         closed = True
-        pb.stop_sequence();
+        # pb.stop_sequence();
         pb.closePB();
         print("✔ Pulse Blaster closed...\x1b[0m")
         return True
@@ -361,7 +361,8 @@ def acquire_data(Nsamples, parameter, sequence, seqArgList, trial):
     # cts = daqctrl.read_daq(ai_task, Nsamples,61*60)    #read DAQ
     # print(f'Nsamples = {Nsamples}')
     # print('Starting capture...')
-    cts = ai_task.read_daq(Nsamples, timeout=60)
+    print(f"Waiting: {params['seq']['t_total(s)']*params['seq']['Nsamples']}s")
+    cts = ai_task.read_daq(Nsamples, timeout=params['seq']['t_total(s)']*params['seq']['Nsamples']+5)
     scan_end_time = time.perf_counter()
     
     scan_time = (scan_end_time - scan_start_time)     # in seconds
@@ -472,7 +473,7 @@ instr = 'diode'
 
 # params['scan']['Nruns'] = Nruns #..........eta notun file e acche... kno??
 [seqArgList, instructionList] = initialize_exp(instr)
-pb.stop_sequence()
+# pb.stop_sequence()
 
 # Experiment operations (with all hardwares working)... ki korbo eta???
 # if trial_run == 'y':

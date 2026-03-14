@@ -2,16 +2,20 @@
 #%%
 import pyvisa as visa, sys, time
 from connectionConfig import sg_addr, sg_model_name
+from parameter_system import Instrument
+
 # Frequency unit multiplier definitions
 Hz = 1
 kHz = 1e3
 MHz = 1e6
 GHz = 1e9
 
-class SignalGenerator():
+class SignalGenerator(Instrument):
     rm = visa.ResourceManager()             # Instantiate a resource manager; rm = object of type ResourceManager
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "sg1") -> None:
+        # Initialize instrument attributes BEFORE calling super().__init__()
+        # because super() will call _register_parameters() which needs these
         self.sg_status = None
         self.addr = ''
         self.modelname = sg_model_name
@@ -20,7 +24,11 @@ class SignalGenerator():
         self.mod_status = ''
         self.mod_type = ''
         self.freq = 2.87e9
-        
+
+        # Initialize Instrument base class (calls _register_parameters())
+        super().__init__(name)
+
+        # Now initialize hardware connection
         self.init_sg(sg_addr)
         
 
@@ -58,6 +66,61 @@ class SignalGenerator():
             
     def uninit_sg(self):
         self.sg.close()
+
+    # ========================================================================
+    # PARAMETER SYSTEM INTEGRATION (New functionality)
+    # ========================================================================
+
+    def _register_parameters(self):
+        """Register all signal generator parameters with the parameter system."""
+        self.register_parameter("frequency", 2.87e9, (0, 20e9), "Hz")
+        self.register_parameter("power", 3, (-130, 25), "dBm")
+        self.register_parameter("phase", 0, (0, 360), "degrees")
+
+    def _update_instrument(self, parameter_name: str, new_value):
+        """
+        Update hardware with new parameter value (safe method with validation).
+
+        This is called by change_parameter() after validation.
+        Use for setup and outer loop parameters.
+        """
+        if parameter_name == "frequency":
+            self.freq = new_value
+            self.sg.write(f'FREQ{new_value}Hz')
+        elif parameter_name == "power":
+            self.rfamp = new_value
+            self.sg.write(f'AMPR{new_value}dBm')
+        elif parameter_name == "phase":
+            # Phase control if needed
+            pass
+
+    def _set_frequency_direct(self, value: float):
+        """
+        Fast frequency setting for ESR inner loop optimization.
+
+        This bypasses validation and is called directly via function pointer
+        in ParameterSweep for maximum performance (<10μs overhead).
+
+        Args:
+            value: Frequency in Hz
+        """
+        print("inside _set_frequency_direct() ??")
+        self.freq = value
+        self.sg.write(f'FREQ{value}Hz')
+
+    def _set_power_direct(self, value: float):
+        """
+        Fast power setting for power sweep optimization.
+
+        Args:
+            value: Power in dBm
+        """
+        self.rfamp = value
+        self.sg.write(f'AMPR{value}dBm')
+
+    # ========================================================================
+    # EXISTING METHODS (Backward compatibility - kept unchanged)
+    # ========================================================================
 
     def sg_err_check(self):
         err = self.sg.query('LERR?')
@@ -171,10 +234,11 @@ class SignalGenerator():
             print('self.sg modulation is off.')
 
 
-class SignalGenerator_sim():
+class SignalGenerator_sim(Instrument):
     rm = visa.ResourceManager()             # Instantiate a resource manager; rm = object of type ResourceManager
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "sg1") -> None:
+        # Initialize instrument attributes BEFORE calling super().__init__()
         self.sg_status = None
         self.addr = ''
         self.modelname = 'SG384'
@@ -183,7 +247,11 @@ class SignalGenerator_sim():
         self.mod_status = ''
         self.mod_type = ''
         self.freq = 2.87e9
-        
+
+        # Initialize Instrument base class (calls _register_parameters())
+        super().__init__(name)
+
+        # Now initialize simulated hardware
         self.init_sg()
         
 
@@ -197,9 +265,58 @@ class SignalGenerator_sim():
         """
         print(">>\x1b[38;2;250;250;0mSimSG: Init'd...\x1b[0m")
         self.sg = None
-    
+
     def uninit_sg(self):
         print(">>\x1b[38;2;250;250;0mSimSG: Uninit'd...\x1b[0m")
+
+    # ========================================================================
+    # PARAMETER SYSTEM INTEGRATION (New functionality)
+    # ========================================================================
+
+    def _register_parameters(self):
+        """Register all signal generator parameters with the parameter system."""
+        self.register_parameter("frequency", 2.87e9, (0, 20e9), "Hz")
+        self.register_parameter("power", 8, (-130, 25), "dBm")
+        self.register_parameter("phase", 0, (0, 360), "degrees")
+
+    def _update_instrument(self, parameter_name: str, new_value):
+        """
+        Update simulated hardware with new parameter value.
+
+        This is called by change_parameter() after validation.
+        """
+        if parameter_name == "frequency":
+            self.freq = new_value
+            print(f"SimSG: Frequency set to {new_value} Hz")
+        elif parameter_name == "power":
+            self.rfamp = new_value
+            print(f"SimSG: Power set to {new_value} dBm")
+        elif parameter_name == "phase":
+            print(f"SimSG: Phase set to {new_value} degrees")
+
+    def _set_frequency_direct(self, value: float):
+        """
+        Fast frequency setting for ESR inner loop optimization (simulated).
+
+        Args:
+            value: Frequency in Hz
+        """
+        self.freq = value
+        # Silently update (no print for performance)
+
+    def _set_power_direct(self, value: float):
+        """
+        Fast power setting for power sweep optimization (simulated).
+
+        Args:
+            value: Power in dBm
+        """
+        self.rfamp = value
+        # Silently update (no print for performance)
+
+    # ========================================================================
+    # EXISTING METHODS (Backward compatibility - kept unchanged)
+    # ========================================================================
                 
     def enable_sg_output(self):
         print("SimSG: output enabled...")

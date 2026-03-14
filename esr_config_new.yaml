@@ -1,0 +1,38 @@
+experiment:
+  name: "ESR_2D"
+  description: "ESR at multiple MW powers"
+  sequence: "esr_seq"
+  mode: "diode"
+
+signal_generator:
+  modulation: "pulse"
+  # Both frequency and power are swept
+
+pulse_blaster:
+  t_AOM_us: 8000
+  clk_MHz: 100
+
+daq:
+  Nsamples: 1000
+  sampling_rate_Hz: 2.0e6
+
+# FIRST = INNERMOST (frequency changes fastest)
+sweep:
+  - parameter: frequency
+    instrument: signal_generator
+    start: 2.82e9
+    stop: 2.92e9
+    step: 1.0e6
+    units: Hz
+  
+  - parameter: power_dBm
+    instrument: signal_generator
+    values: [0, 3, 6, 9, 12]   # explicit list
+    units: dBm
+
+acquisition:
+  Nruns: 10
+  contrast_mode: "ratio_signal_over_reference"
+
+output:
+  filename_prefix: "ESR_2D"

@@ -16,7 +16,7 @@
 # 2. Altered source versions must be plainly marked as such, and must not be
 # misrepresented as being the original software.
 # 3. This notice may not be removed or altered from any source distribution.
-
+#%%
 import ctypes
 from enum import IntEnum
 
@@ -56,6 +56,9 @@ class Inst:
 	LONG_DELAY = 7
 	WAIT = 8
 	RTI = 9
+
+	def __class_getitem__(cls, key):
+		return getattr(cls, key)
 
 spinapi.pb_get_version.restype = (ctypes.c_char_p)      # artype = argument data type
 spinapi.pb_get_error.restype = (ctypes.c_char_p)        # restype = response data type

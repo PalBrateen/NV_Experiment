@@ -8,16 +8,17 @@ from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, camera
 
 
 clk_cyc = 1e3/PBclk #in ns
-MW_power = -18         # [dBm]
+MW_power = -2         # [dBm]
 
-scan_range = {
+scan = {
     'freq': {
         'range': [2.82 *GHz, 2.92 *GHz],       # [start, end] frequency in Hz
+        'range': [2.82 *GHz],
         # 'range': None,
-        'step': 1 *MHz,
+        # 'step': 1 *MHz,
         # 'step': None,
         # 'Nscanpts': None,
-        # 'Nscanpts': 10,
+        'Nscanpts': 1,
         },
 
     # 'mw_power': {
@@ -31,42 +32,48 @@ shuffle_values = True
 
 # Sequence parameters:----------------------------------------------------
 
-t_AOM = 8000 *ms          # Duration of one-half of signal-aquisition half (camera 8000 *ms)
-t_AOM = 0.08 *ms
-# t_AOM = 5 *ms
+# t_AOM = 8000 *ms          # Duration of one-half of signal-aquisition half (camera 8000 *ms)
+# t_AOM = 0.08 *ms
+t_AOM = 20 *us
+t_AOM = 1 *ms
 t_tot = 2*t_AOM
 
 sequenceArgs = [t_AOM]         #Sequence args
 
 # Averaging parameters:
-Nsamples = 100            # Number of FL samples to take at each frequency point
-Nruns = 5                 # Number of averaging runs
+Nsamples:int = int( 10*60 *1000 /2 )           # Number of FL samples to take at each frequency point
+Nruns = 1                 # Number of averaging runs
 
 reload_pb = True
 load_all_params = False
 
-PBchannels = {'samp':samp_clk, 'mw':MW, 'laser':laser, 'start':start_trig}#, 'camera': camera}
+PBchannels = {'samp':samp_clk,
+               'mw':MW,
+              'laser':laser,
+              'start':start_trig
+              #, 'camera': camera
+            }
 
 ## ------------------------------------------------------------
-# Can extend to other parameters using <<for param in scan_range.keys()>> structure
-input_range = scan_range['freq']['range']
+# Can extend to other parameters using <<for param in scan.keys()>> structure
+input_range = scan['freq']['range']
 if input_range is not None:
     scan_start = input_range[0]
     scan_end = input_range[1] if len(input_range)>1 else scan_start
 
-    if scan_range['freq'].get('Nscanpts', None) is None:
-        scan_step = scan_range['freq']['step']
-        scan_range['freq']['Nscanpts'] = round((scan_end - scan_start)/scan_step + 1)
+    if scan['freq'].get('Nscanpts', None) is None:
+        scan_step = scan['freq']['step']
+        scan['freq']['Nscanpts'] = round((scan_end - scan_start)/scan_step + 1)
 
-    elif scan_range['freq'].get('step', None) is None:
-        Nscanpts = scan_range['freq']['Nscanpts']
-        scan_range['freq']['step'] = (scan_end - scan_start)/(Nscanpts - 1) if Nscanpts>1 else 0
+    elif scan['freq'].get('step', None) is None:
+        Nscanpts = scan['freq']['Nscanpts']
+        scan['freq']['step'] = (scan_end - scan_start)/(Nscanpts - 1) if Nscanpts>1 else 0
     
-    scan_range['freq']['values'] = list(np.linspace(scan_start, scan_end, scan_range['freq']['Nscanpts'], endpoint=True))
+    scan['freq']['values'] = list(np.linspace(scan_start, scan_end, scan['freq']['Nscanpts'], endpoint=True))
 else:
-    # For non-linear frequency sweeps, define scan_range['freq']['range'] = <list of 1st and last elements>,
-    # scan_range['freq']['step'] = None,
-    # scan_range['freq']['Nscanpts'] = <number of points in each segment>
+    # For non-linear frequency sweeps, define scan['freq']['range'] = <list of 1st and last elements>,
+    # scan['freq']['step'] = None,
+    # scan['freq']['Nscanpts'] = <number of points in each segment>
 
     def nonlin_freq_sweep(f):
         params_dict = {}; values = []
@@ -96,13 +103,13 @@ else:
     }
     params_dict, values = nonlin_freq_sweep(f)
 
-    scan_range['freq']['range'] = [values[0], values[-1]]
-    scan_range['freq']['step'] = None
-    scan_range['freq']['Nscanpts'] = sum([vals[0] for vals in params_dict.values()])
-    scan_range['freq']['values'] = list(np.array(values) *GHz)
+    scan['freq']['range'] = [values[0], values[-1]]
+    scan['freq']['step'] = None
+    scan['freq']['Nscanpts'] = sum([vals[0] for vals in params_dict.values()])
+    scan['freq']['values'] = list(np.array(values) *GHz)
 
 # if shuffle_values:
-#     np.random.shuffle(scan_range['freq']['values'])
+#     np.random.shuffle(scan['freq']['values'])
 
 PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
 
@@ -118,9 +125,9 @@ def update_params_dict():
     
     params = {
         'scan': {
-            'names': list(scan_range.keys()),
-            'values': [scan_range[key]['values'] for key in scan_range.keys()],
-            'Nscanpts': scan_range['freq']['Nscanpts'],
+            'names': list(scan.keys()),
+            'values': [scan[key]['values'] for key in scan.keys()],
+            'Nscanpts': scan['freq']['Nscanpts'],
             'Nruns': Nruns,
             'reload_pb': reload_pb,
             'load_all_params': load_all_params,
@@ -128,7 +135,7 @@ def update_params_dict():
 
         'mw': {
             'power': MW_power,
-            'freq': scan_range['freq']['values'],
+            'freq': scan['freq']['values'],
         },
         
         'seq': {
@@ -137,6 +144,7 @@ def update_params_dict():
             'sequence': 'esr_seq',
             'args_name': ['t_AOM'],
             'args': sequenceArgs,
+            't_total(s)': seq_times['t_total']/1e9
 
             # instructionList to be added later - only the last generated sequence will be saved
             # the variable that goes into the plot function
@@ -204,3 +212,31 @@ params_dict = update_params_dict()
 # with open('params_dict.yaml', 'w') as f:
 #     yaml.dump(convert_numpy_to_python(params_dict), f)
 
+# FIXME: below error comes when 'mw' PBchannel key is removed which should not happen...
+# Traceback (most recent call last):
+
+#   File "D:\Brateen\NV_Experiment\mainControl_diode.py", line 474, in <module>
+#     [seqArgList, instructionList] = initialize_exp(instr)
+
+#   File "D:\Brateen\NV_Experiment\mainControl_diode.py", line 166, in initialize_exp
+#     sequencecontrol.view_sequence(instr, params['seq']['sequence'], seqArgList+[params['pb']['channels']],
+
+#   File "D:\Brateen\NV_Experiment\sequencecontrol.py", line 413, in view_sequence
+#     plt.yticks(yTicks, seqArgList[-1].keys())          # Include the names of the PB channels
+
+#   File "C:\Users\Smart\miniconda3\envs\nv-pc\lib\site-packages\matplotlib\pyplot.py", line 1719, in yticks
+#     labels = ax.set_yticklabels(labels, **kwargs)
+
+#   File "C:\Users\Smart\miniconda3\envs\nv-pc\lib\site-packages\matplotlib\axes\_base.py", line 63, in wrapper
+#     return get_method(self)(*args, **kwargs)
+
+#   File "C:\Users\Smart\miniconda3\envs\nv-pc\lib\site-packages\matplotlib\cbook\deprecation.py", line 451, in wrapper
+#     return func(*args, **kwargs)
+
+#   File "C:\Users\Smart\miniconda3\envs\nv-pc\lib\site-packages\matplotlib\axis.py", line 1796, in _set_ticklabels
+#     return self.set_ticklabels(labels, minor=minor, **kwargs)
+
+#   File "C:\Users\Smart\miniconda3\envs\nv-pc\lib\site-packages\matplotlib\axis.py", line 1717, in set_ticklabels
+#     raise ValueError(
+
+# ValueError: The number of FixedLocator locations (4), usually from a call to set_ticks, does not match the number of ticklabels (3).

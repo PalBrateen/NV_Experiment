@@ -5,17 +5,22 @@ from spinapi import *
 # from sequencecontrol import sequencecontrol
 import sequencecontrol
 import numpy as np, connectionConfig as concfg, sys, time
+from parameter_system import Instrument
 
-class PulseBlaster:
-    
-    def __init__(self, parameter_dict) -> None:
+class PulseBlaster(Instrument):
+
+    def __init__(self, parameter_dict, name: str = "pb1") -> None:
+        # Initialize pulse blaster attributes BEFORE calling super().__init__()
         self.parameter_dict = parameter_dict
         # the time unit is in ns.. as followed by the Pulse Blaster
         self.pbclk = concfg.PBclk
         # self.clk_cyc = (1 / self.pbclk) * 1e3  # in ns
         self.clk_cyc = self.parameter_dict['pb']['clk_cyc']
         self.pb_status = "closed"
-        # self.configure()
+        self._instr_type = 'diode'  # Set by experiment controller ('diode', 'cam_levelm', etc.)
+
+        # Initialize Instrument base class (calls _register_parameters())
+        super().__init__(name)
 
         # the state of the PulseBlaster is as follows, state can be enquired after initialization
         # error         - if error occurs, replace the sys.exit() with this
@@ -26,13 +31,124 @@ class PulseBlaster:
         # running       - after pb_start()
         # stopped       - after pb_stop()
     #     self._seqctrl: sequencecontrol  # Will be injected
-    
+
     # def set_sequencecontrol(self, seqctrl_obj):
     #     self._seqctrl = seqctrl_obj
+        self.configure()
     
     def return_params(self):
         return self.parameter_dict
-    
+
+    # ========================================================================
+    # PARAMETER SYSTEM INTEGRATION (New functionality)
+    # ========================================================================
+
+    def _register_parameters(self):
+        """Register PB timing parameters."""
+        seq = self.parameter_dict.get('seq', {})
+        self.register_parameter("pulse_duration", seq.get('pulse_duration', 100e-9), (0, 1), "s")
+        self.register_parameter("tau", seq.get('tau', 1e-6), (0, 1e-3), "s")
+        self.register_parameter("t_AOM", seq.get('t_AOM', 5e-6), (0, 1), "s")
+        self.register_parameter("ro_delay", seq.get('ro_delay', 1e-6), (0, 1e-3), "s")
+
+    def set_instr_type(self, instr_type: str):
+        """Set instrument type ('diode' or 'cam_levelm', etc.)"""
+        self._instr_type = instr_type
+
+    def _get_sequence_name(self) -> str:
+        """Get sequence name from parameter_dict."""
+        return self.parameter_dict.get('seq', {}).get('sequence', '')
+
+    def _build_sequence_args(self) -> list:
+        """Build sequence args from current parameter_dict."""
+        seq = self.parameter_dict.get('seq', {})
+        sequence = self._get_sequence_name()
+
+        if 'rabi' in sequence:
+            return [seq.get('t_AOM'), seq.get('ro_delay'),
+                    seq.get('AOM_lag'), seq.get('MW_lag')]
+        elif 'esr' in sequence:
+            return [seq.get('t_AOM')]
+        elif 't1' in sequence:
+            return [seq.get('t_AOM'), seq.get('ro_delay'), seq.get('AOM_lag')]
+        elif 't2' in sequence or 'hahn' in sequence:
+            return [seq.get('t_AOM'), seq.get('ro_delay'),
+                    seq.get('AOM_lag'), seq.get('MW_lag'), seq.get('tau')]
+        else:
+            # Default
+            return [seq.get('t_AOM')]
+
+    def _reprogram_sequence(self, pb_channels):
+        """Reprogram PB with current parameter_dict values."""
+        sequence = self._get_sequence_name()
+
+        # edited - for checking, need to fix problem
+        # seq_args = self._build_sequence_args()
+        seq_args = [80*1000]
+
+        # Add PB channels
+        # pb_channels = self.parameter_dict.get('seq', {}).get('PBchannels', {})
+        # edited - for checking, need to fix problem
+        # pb_channels = {'samp':2,
+        #        'mw':4,
+        #       'laser':8,
+        #       'start':2**4
+        #       #, 'camera': camera
+        #     }
+        # edited, but ok
+        print(f"pb channels = {pb_channels}")
+        seq_args += [pb_channels]
+
+        print(f"sequence = {sequence}")
+        print(f"seq_args = {seq_args}")
+
+        # Program PB
+        _, instr_list = PulseBlaster.PB_program(self._instr_type, sequence, seq_args)
+        
+        instructionList = []
+
+        # edited - this is how it happens in old code..
+        # Load to hardware
+        if self._instr_type == 'diode':
+            for i in range(0, len(instr_list)):
+                instructionList.append(instr_list[i][0])
+            self.run_sequence_for_diode(instructionList)
+        # Add other instr_types as needed
+
+    # ================================================================
+    # SMART SETTERS - Update value + auto-reprogram
+    # ================================================================
+
+    def _set_pulse_duration_direct(self, value: float):
+        """Set pulse duration and reprogram PB. Used for Rabi."""
+        self.parameter_dict['seq']['pulse_duration'] = value
+        self._reprogram_sequence()
+
+    def _set_tau_direct(self, value: float):
+        """Set tau and reprogram PB. Used for T2/Hahn Echo."""
+        self.parameter_dict['seq']['tau'] = value
+        self._reprogram_sequence()
+
+    def _set_t_AOM_direct(self, value: float):
+        """Set AOM duration and reprogram PB."""
+        self.parameter_dict['seq']['t_AOM'] = value
+        self._reprogram_sequence()
+
+    def _set_ro_delay_direct(self, value: float):
+        """Set readout delay and reprogram PB."""
+        self.parameter_dict['seq']['ro_delay'] = value
+        self._reprogram_sequence()
+
+    def _update_instrument(self, parameter_name: str, new_value):
+        """Fallback update method (used by change_parameter)."""
+        if parameter_name in ['pulse_duration', 'tau', 't_AOM', 'ro_delay']:
+            self.parameter_dict['seq'][parameter_name] = new_value
+            self._reprogram_sequence()
+
+    # ========================================================================
+    # EXISTING METHODS (Backward compatibility - kept unchanged)
+    # ========================================================================
+
     def errorCatcher(self, status):
         """
         Display the error occuring due to programming the PB board.
@@ -344,7 +460,7 @@ class PulseBlaster:
         started = False
         start = [0]  # (List) with one element; start[0]=0
         # pb_inst_pbonly(int flags, int inst, int inst_data, double time_period)
-        # print(instructionList)
+        print(instructionList)
         for i in range(0, len(instructionList)):
             if started:
                 status = pb_inst_pbonly(instructionList[i][0], instructionList[i][1], instructionList[i][2], instructionList[i][3]);

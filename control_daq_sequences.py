@@ -31,7 +31,7 @@ def make_esr_seq(seq_dur, pb_channels):
     # pd_pulse.extend([seq_dur/2-readout_buffer-1*us, seq_dur-readout_buffer-1*us])
 
     laser_channel = PBchannel(pb_channels.get('laser',-1), [0], [seq_dur])
-    MW_channel = PBchannel(pb_channels.get('mw',-1), [0], [seq_dur/2]) # seq_dur/2
+    MW_channel = PBchannel(pb_channels.get('MW',-1), [0], [seq_dur/2]) # seq_dur/2
     start_trig_channel = PBchannel(pb_channels.get('start',-1), [0], [trig_width])
     
     samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [(pulse) for pulse in pd_pulse],

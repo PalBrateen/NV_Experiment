@@ -5,6 +5,7 @@ from  nidaqmx.constants import VoltageUnits, TerminalConfiguration, AcquisitionT
 from typing import Union, List, Tuple, Optional
 from abc import ABC, abstractmethod
 from typing import Optional, Union, List  # Import at the top of file
+from parameter_system import Instrument
 
 # Base abstract class for common functionality
 class DAQTask(ABC):
@@ -25,36 +26,48 @@ class DAQTask(ABC):
         pass
 
 # Specialized classes for each type
-class AnalogInputTask(DAQTask):
+class AnalogInputTask(Instrument, DAQTask):
+    """
+    Analog Input Task with dual inheritance.
+
+    Inherits from:
+    - Instrument: Parameter system integration
+    - DAQTask: DAQ-specific functionality
+    """
+    # all the attributes of the class are saved to the parameter file except the ones starting with _
+
     def __init__(self,
-                 channels: Optional[List[int]] = [21],
-                 voltage_range: tuple = (-10, 10),
-                 sampling_source: str = 'internal',
+                 dev: str = "P6363",
+                 channels: Optional[List[int]] = [15],
+                 voltage_range: Tuple[float, float] = (-10., 10.),
+                 sampling_source: str = "",         # "" means internal sample clock
                  sampling_rate: float = 2e6,
                  sampling_mode: str = "finite",
-                 samples_to_acquire: int = 100,
+                 samps_per_chan: int = 100,
                  trigger_source: Optional[str] = None,  # Optional trigger
                  trigger_edge: str = "rising",       # Only used if trigger_source exists
                 #  trigger_level: Optional[float] = None,  # Optional level for analog trigger
+                 name: str = "ai_task",
         ):
-        super().__init__()
-        self.dev = "P6363"
-        self.channels = channels or []
+        # Initialize DAQ attributes BEFORE calling super().__init__()
+        self.dev = dev
+        self.channels = channels or [21]
         self.min_voltage, self.max_voltage = voltage_range
         self.sampling_source = sampling_source
         self.sampling_rate = sampling_rate
         self.sampling_mode = sampling_mode
-        self.samples_to_acquire:int = samples_to_acquire
-        # self.params:dict = {}
+        self.samps_per_chan: int = samps_per_chan
+
+        # Initialize both parent classes
+        Instrument.__init__(self, name)
+        DAQTask.__init__(self)
 
         # Store trigger configuration if provided
-        self.trigger_config:dict = {}
-        # print(trigger_source)
+        self.trigger_config: dict = {}
         if trigger_source:
             self.trigger_config = {
                 "source": trigger_source,
                 "edge": trigger_edge,
-                # "level": trigger_level,
             }
         self._task: nidaqmx.Task
 
@@ -74,11 +87,11 @@ class AnalogInputTask(DAQTask):
                 )
             # print(DAQConfiguration.get_sampling_mode(mode_name=self.sampling_mode))
             self._task.timing.cfg_samp_clk_timing(
-                rate=2e6,
-                source=concfg.samp_clk_terminal,
+                rate=self.sampling_rate,
+                source=self.sampling_source,
                 active_edge=Edge.RISING,
                 sample_mode=DAQConfiguration.get_sampling_mode(mode_name=self.sampling_mode),
-                samps_per_chan=int(self.samples_to_acquire),
+                samps_per_chan=int(self.samps_per_chan),
             )
             # print()
 
@@ -135,7 +148,7 @@ class AnalogInputTask(DAQTask):
             logging.exception(f"❌ Start failed: {str(e)}")
             raise #RuntimeError(f"❌ Start failed: {str(e)}")
 
-    def read_daq(self,Nsamples,timeout=120):
+    def read_daq(self,Nsamples:int,timeout:int=120):
         try:
             counts = self._task.read(Nsamples, timeout)
         except Exception as excpt:
@@ -164,30 +177,69 @@ class AnalogInputTask(DAQTask):
         except Exception as e:
             logging.exception(f"⚠ Warning: Error during cleanup: {str(e)}")
 
-class  AnalogOutputTask(DAQTask):
+    # ========================================================================
+    # PARAMETER SYSTEM INTEGRATION (New functionality)
+    # ========================================================================
+
+    def _register_parameters(self):
+        """Register DAQ analog input parameters with the parameter system."""
+        self.register_parameter("sampling_rate", self.sampling_rate, (1, 2e6), "Sa/s")
+        self.register_parameter("voltage_range_min", self.min_voltage, (-10, 10), "V")
+        self.register_parameter("voltage_range_max", self.max_voltage, (-10, 10), "V")
+
+    def _update_instrument(self, parameter_name: str, new_value):
+        """
+        Update DAQ configuration with new parameter value.
+
+        Note: For DAQ, changing parameters typically requires reconfiguring the task.
+        This is a simplified implementation - full implementation may need task recreation.
+        """
+        if parameter_name == "sampling_rate":
+            self.sampling_rate = new_value
+            # Note: Would need to reconfigure task in practice
+        elif parameter_name == "voltage_range_min":
+            self.min_voltage = new_value
+        elif parameter_name == "voltage_range_max":
+            self.max_voltage = new_value
+
+
+class AnalogOutputTask(Instrument, DAQTask):
+    """
+    Analog Output Task with dual inheritance.
+
+    Inherits from:
+    - Instrument: Parameter system integration
+    - DAQTask: DAQ-specific functionality
+    """
     def __init__(self,
-                 channels: Optional[List[int]] = [0,1,2],
+                 dev,
+                 channels: List[int],
                  voltage_range: tuple = (-10, 10),
                  sampling_rate: float = 1000,
                  sampling_mode: str = "continuous",
-                 samples_to_generate: int = 1000,       # this will define the output buffer
+                 samps_per_chan: int = 1000,       # this will define the output buffer
                  coil: str = 'default',
                  trigger_source: Optional[str] = '',  # Optional trigger
                  trigger_edge: str = "rising",       # Only used if trigger_source exists
                  trigger_level: Optional[float] = None,  # Optional level for analog trigger
+                 name: str = "ao_task",
         ):
-        super().__init__()
-        self.dev = "P6363"
+        # Initialize DAQ attributes BEFORE calling super().__init__()
+        self.dev = dev
         self.channels = channels or []
         self.min_voltage, self.max_voltage = voltage_range
         self.sampling_rate = sampling_rate
         self.sampling_mode = sampling_mode
-        self.samples_to_generate = samples_to_generate
+        self.samps_per_chan = samps_per_chan
         self.coil = coil
-        self.params:dict = {}
-        
+        self.params: dict = {}
+
+        # Initialize both parent classes
+        Instrument.__init__(self, name)
+        DAQTask.__init__(self)
+
         # Store trigger configuration if provided
-        self.trigger_config:dict = {}
+        self.trigger_config: dict = {}
         if trigger_source != '':
             self.trigger_config = {
                 "source": trigger_source,
@@ -215,7 +267,7 @@ class  AnalogOutputTask(DAQTask):
                 source='',
                 active_edge=DAQConfiguration.get_trigger_edge(edge_name="rising"),
                 sample_mode=DAQConfiguration.get_sampling_mode(mode_name=self.sampling_mode),
-                samps_per_chan=self.samples_to_generate
+                samps_per_chan=self.samps_per_chan
             )
 
             # Configure trigger only if specified
@@ -252,12 +304,12 @@ class  AnalogOutputTask(DAQTask):
             logging.exception(f"❌ Trigger configuration failed: {str(e)}")
             raise #RuntimeError(f"Trigger configuration failed: {str(e)}")
 
-    def start(self, data: Union[np.ndarray, List[float], Tuple[float, ...]]):
+    def start(self, data: Union[np.ndarray, List[float], Tuple[float, ...]], auto_start:bool=True):
         try:
             if self._task_state != "configured":
                 raise RuntimeError("Task must be configured before starting")
             # self._task.start()
-            self._task.write(data, auto_start=True)
+            self._task.write(data, auto_start=auto_start)
             self._task_state = "running"
         except Exception as e:
             self._task_state = "error"
@@ -362,7 +414,7 @@ class  AnalogOutputTask(DAQTask):
     def create_retriggerable_ao_task(self, data_shape: tuple):
         """configure the retriggerable output task"""
 
-        self.samples_to_generate = np.max(data_shape)
+        self.samps_per_chan = np.max(data_shape)
         self.sampling_rate = 100e3
         # configure the retriggerable task
         try:
@@ -380,12 +432,12 @@ class  AnalogOutputTask(DAQTask):
                 source = '',
                 active_edge = Edge.RISING,
                 sample_mode = AcquisitionType.FINITE,
-                samps_per_chan = 1*self.samples_to_generate
+                samps_per_chan = 1*self.samps_per_chan
             )
 
             # check output buffer size
             # print(f"Host Buff size = {self._task.out_stream.output_buf_size}")
-            self._task.out_stream.output_buf_size = self.samples_to_generate
+            self._task.out_stream.output_buf_size = self.samps_per_chan
             # print(f"Host Buff size = {self._task.out_stream.output_buf_size}")
             # print(f"Onbrd Buff size = {self._task.out_stream.output_onbrd_buf_size}")
             
@@ -432,6 +484,32 @@ class  AnalogOutputTask(DAQTask):
     #     # calibration = [19,19,37]
     #     output_aovoltage = output_field/self.calibration
     #     return output_aovoltage
+
+    # ========================================================================
+    # PARAMETER SYSTEM INTEGRATION (New functionality)
+    # ========================================================================
+
+    def _register_parameters(self):
+        """Register DAQ analog output parameters with the parameter system."""
+        self.register_parameter("sampling_rate", self.sampling_rate, (1, 2e6), "Sa/s")
+        self.register_parameter("voltage_range_min", self.min_voltage, (-10, 10), "V")
+        self.register_parameter("voltage_range_max", self.max_voltage, (-10, 10), "V")
+
+    def _update_instrument(self, parameter_name: str, new_value):
+        """
+        Update DAQ configuration with new parameter value.
+
+        Note: For DAQ, changing parameters typically requires reconfiguring the task.
+        This is a simplified implementation - full implementation may need task recreation.
+        """
+        if parameter_name == "sampling_rate":
+            self.sampling_rate = new_value
+            # Note: Would need to reconfigure task in practice
+        elif parameter_name == "voltage_range_min":
+            self.min_voltage = new_value
+        elif parameter_name == "voltage_range_max":
+            self.max_voltage = new_value
+
 
 class CounterInputTask(DAQTask):
     def __init__(self, edge_config: str):

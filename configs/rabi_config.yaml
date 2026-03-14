@@ -1,0 +1,52 @@
+# Rabi Oscillation Configuration (YAML format)
+# Auto-loaded by config_loader.py
+
+experiment:
+  name: Rabi
+  description: Rabi oscillation measurement (MW pulse duration sweep)
+  sequence: rabi_seq
+  mode: diode
+
+signal_generator:
+  power_dBm: 8
+  frequency_Hz: 2.87e9  # Fixed frequency for Rabi
+  modulation: pulse
+
+pulse_blaster:
+  t_AOM_us: 20        # AOM pulse duration in microseconds
+  ro_delay_ns: 1800   # Readout delay in nanoseconds
+  AOM_lag_ns: 800     # AOM lag time
+  MW_lag_ns: 150      # MW lag time
+  clk_MHz: 100        # PulseBlaster clock frequency
+
+daq:
+  Nsamples: 2         # Number of samples (signal + reference)
+  sampling_rate_Hz: 2000000
+  voltage_range_V: [-10, 10]
+
+acquisition:
+  Nruns: 1            # Number of averaging runs
+  contrast_mode: ratio_signal_over_reference
+  randomize: false
+
+# Sweep configuration
+# PulseBlaster will auto-reprogram for each pulse_duration value!
+sweep:
+  - parameter: pulse_duration
+    instrument: pulse_blaster
+    start: 10.0e-9    # 10 ns
+    stop: 500.0e-9    # 500 ns
+    step: 2.0e-9      # 2 ns steps
+    units: s
+    # Total points: (500e-9 - 10e-9) / 2e-9 + 1 = 246
+
+output:
+  save_path: Saved_Data/
+  filename_prefix: Rabi
+  auto_save_interval: 0
+
+  plot:
+    x_label: Pulse Duration (ns)
+    x_scale: 1.0e9       # Convert s to ns for plotting
+    y_label: PL Signal
+    live_update: true

@@ -1,0 +1,44 @@
+experiment:
+  name: "Rabi"
+  description: "Rabi oscillation - MW pulse duration sweep"
+  sequence: "rabi_seq"
+  mode: "diode"
+
+signal_generator:
+  power_dBm: 8
+  frequency_Hz: 2.87e9    # Fixed for Rabi
+  modulation: "pulse"
+
+pulse_blaster:
+  t_AOM_us: 20            # AOM duration [us]
+  ro_delay_ns: 1800       # readout delay [ns]
+  AOM_lag_ns: 800
+  MW_lag_ns: 150
+  clk_MHz: 100
+
+daq:
+  Nsamples: 2
+  sampling_rate_Hz: 2.0e6
+  voltage_range_V: [-10, 10]
+
+sweep:
+  - parameter: pulse_duration
+    instrument: pulse_blaster
+    start: 10.0e-9
+    stop: 500.0e-9
+    step: 2.0e-9
+    units: s
+
+acquisition:
+  Nruns: 1
+  contrast_mode: "ratio_signal_over_reference"
+  randomize: true
+
+output:
+  save_path: "Saved_Data/"
+  filename_prefix: "Rabi"
+  
+  plot:
+    x_label: "MW pulse duration (ns)"
+    x_scale: 1.0e-9
+    y_label: "Contrast"

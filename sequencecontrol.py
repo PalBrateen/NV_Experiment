@@ -52,8 +52,8 @@ class sequencecontrol:
             sys.exit()
         
         Nscanpts = self.parameter_dict['scan']['Nscanpts']
-        if (not isinstance(Nscanpts, int)) or (Nscanpts < 2):
-            print('❌ Error: N_scanPts must be an integer >= 2.')
+        if (not isinstance(Nscanpts, int)) or (Nscanpts < 1):
+            print('❌ Error: N_scanPts must be an integer >= 1.')
             sys.exit()
         
         scan = self.parameter_dict['scan']['values']
