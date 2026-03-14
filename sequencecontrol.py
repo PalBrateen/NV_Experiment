@@ -51,12 +51,12 @@ class sequencecontrol:
             print('❌ Error: Nruns must be an integer >= 1.')
             sys.exit()
         
-        Nscanpts = self.parameter_dict['scan']['Nscanpts']
-        if (not isinstance(Nscanpts, int)) or (Nscanpts < 2):
-            print('❌ Error: N_scanPts must be an integer >= 2.')
+        Nscanpts = self.parameter_dict['scan'][self.parameter_dict['scan']['names'][0]]['Nscanpts']
+        if (not isinstance(Nscanpts, int)) or (Nscanpts < 1):
+            print('❌ Error: N_scanPts must be an integer >= 1.')
             sys.exit()
         
-        scan = self.parameter_dict['scan']['values']
+        scan = self.parameter_dict['scan'][self.parameter_dict['scan']['names'][0]]['values']
 
         # if len(scan) > 1:
         # step_size = expCfg.scannedParam[1] - expCfg.scannedParam[0]
@@ -174,10 +174,10 @@ class sequencecontrol:
                 
         if self.parameter_dict['seq']['sequence'] =='rabi_seq':
             # Pulseblaster bug - our PulseBlaster boards do not seem to be able to output 8ns pulses. So, check if we asked for 8ns and remove this point:
-            if 8 in self.parameter_dict['scan']['values']:
+            if 8 in self.parameter_dict['scan'][self.parameter_dict['scan']['names'][0]]['values']:
                 # expCfg.scannedParam = list(expCfg.scannedParam)
-                self.parameter_dict['scan']['values'].remove(8)
-                self.parameter_dict['scan']['Nscanpts'] = len(self.parameter_dict['scan']['values'])
+                self.parameter_dict['scan'][self.parameter_dict['scan']['names'][0]]['values'].remove(8)
+                self.parameter_dict['scan'][self.parameter_dict['scan']['names'][0]]['Nscanpts'] = len(self.parameter_dict['scan'][self.parameter_dict['scan']['names'][0]]['values'])
                 print('⚠ \x1b[38;2;250;200;0mWarning: will not collect data at 8ns scan point \x1b[0mdue to unofficial reports of a possible issue with some PB boards whereby the instruction for outputting 8ns pulses generates 10ns pulses. Removing the 8ns scan point from the list of scan points.\x1b[0m')
         
         # if (expCfg.sequence == 'XY8seq') or (expCfg.sequence=='T2seq' and expCfg.numberOfPiPulses > 1):
@@ -312,8 +312,12 @@ class sequencecontrol:
                 'diff_mod':daq_seq.make_diff_mod_sequence, 'esr_dig_mod_seq':daq_seq.make_dig_mod_odmr_sequence,
                 'rabi_dig_mod_seq':daq_seq.make_dig_mod_rabi_sequence,
                 'rabi_contrast_seq':daq_seq.make_rabi_contrast_sequence,
-                }
-            
+            }
+        
+        elif instr == 'lia':
+            var = {'esr_seq':lia_seq.make_esr_seq,
+            }
+
         # print(var)
         if sequence in var.keys():
             # instead of directly assigning the name of the function to the dictionary, return the name when the function is called
@@ -481,6 +485,7 @@ class sequencecontrol:
 
     # the fucntion modification is completed on 17062023.. completed...
     @staticmethod
+    # TODO: maincontrol had a parameter params['pb']['channels'] in the function call..
     def param_err_check(instr, sequence, seqArgList, parameter=[0,1], Nscanpts=1):
         # Trial run over all parameters to check whether the durations of all Inst < 10ns (=5*self.clk_cyc)
         n_error = 0; param = []; not_param = []

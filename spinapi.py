@@ -57,6 +57,9 @@ class Inst:
 	WAIT = 8
 	RTI = 9
 
+	def __class_getitem__(cls, key):
+		return getattr(cls, key)
+
 spinapi.pb_get_version.restype = (ctypes.c_char_p)      # artype = argument data type
 spinapi.pb_get_error.restype = (ctypes.c_char_p)        # restype = response data type
 

@@ -23,7 +23,7 @@
 
 # To avoid accidentally using the base use:
 # conda config --set auto_activate_base false   # Disable auto-activation of base environment
-name: NV_py3.12
+name: py3.12
 channels:
   - conda-forge
   - defaults
@@ -32,7 +32,7 @@ dependencies:
   - python<3.13
 
   # spyder
-  # - spyder
+  - spyder
   - spyder-kernels
 
   # Jupyter
@@ -40,38 +40,14 @@ dependencies:
   - jupyter
   - jupyterlab
   - jupyterthemes
-  - ipympl
   #- notebook
 
   # scientific computing
   - numpy
   - scipy
-  - scikit-image
+  # - scikit-image
   - matplotlib
   - seaborn
-  - vitables
-  - trackpy
-  - pims
-  - h5py
-  - allantools
-
-  # plotting
-  - dash
-  - plotly
-  - plotly-resampler
-
-  # GPU
-  - cupy
-
-  # hardware interface
-  - pyvisa
-  - nidaqmx-python>=1.0
-  - python-decouple   # required by nidaqmx-python
-  #- hightime    # this is from pip: pip install hightime
-  - tzlocal
-  - pylablib
-
-  # GUI and visual
   - pyside6
   - opencv
   
@@ -80,10 +56,6 @@ dependencies:
   - screeninfo
   - colored
 
-  - pip
-  - pip:
-    - zhinst
-    - snapi
   # conda create -n test_env1 python<3.13 numpy scipy scikit-image pyside6 pyqtgraph pyvisa nidaqmx-python>=1.0 vitables matplotlib seaborn spyder jupyter jupyterlab ipykernel trackpy pims dask h5py opencv qtconsole spyder-kernel --dry-run
 
   # Spyder Shortcut

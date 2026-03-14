@@ -40,6 +40,7 @@ dependencies:
   - jupyter
   - jupyterlab
   - jupyterthemes
+  - ipympl
   #- notebook
 
   # scientific computing

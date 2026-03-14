@@ -21,12 +21,18 @@ PB_bx = 5
 PB_by = 6
 PB_bz = 7
 
+PB_LIA1 = 1
+PB_LIA3 = 4
+
 # DAQ Connections-------------------------------------------------------
 input_terminals = [21]#, "P6363/ai8"]
+input_terminals = [15]
+
 # Detector connected to AI7 and PD to AI6
 conv_clk_terminal = "PFI9"     # ADC conversion pulses
 samp_clk_terminal = "PFI14"     # Start sampling from the channels in the scan list
 start_trig_terminal = "PFI15"   # Trigger the start of data acquisiton
+
 def cal_samp_rate():
     if len(input_terminals)==1:
         daq_max_samp_rate = 2e6    # Max samp rate in samp/CH/sec
@@ -37,12 +43,12 @@ def cal_samp_rate():
 daq_max_samp_rate = cal_samp_rate()
 
 #SRS Connections-------------------------------------------------------
-sg_addr = ["ASRL4::INSTR", "TCPIP0::10.56.10.12::inst0::INSTR"]
-sg_model_name='SG384'
+sg_addr = ["ASRL4::INSTR", "TCPIP0::10.56.10.24::inst0::INSTR"]
 
-#------------------------- END OF USER INPUT ----------------------------------#
 
-#%% Convert PB bit number to PB register address:
+#%%------------------------- END OF USER INPUT ----------------------------------#
+
+# Convert PB bit number to PB register address:
 # To switch ON the samp_clk PB channel, a flag of 2^2=4 must be raised... which equals 0b100/0x4
 # Similarly, 0x10(=16=2^4) passed as flag would turn ON the 4th bit (PB_I, here)
 laser = 2**PB_AOM
@@ -56,6 +62,8 @@ camera = 2**PB_camera
 bx = 2**PB_bx
 by = 2**PB_by
 bz = 2**PB_bz
+lia1 = 2**PB_LIA1
+lia3 = 2**PB_LIA3
 
 # def update_connections():
 
@@ -73,6 +81,8 @@ params = {
             'camera': camera,
             'I': I,
             'Q': Q,
+            'lia1': lia1,
+            'lia3': lia3,
         },
         # 'pb_bits': {
             # 'PB_AOM': PB_AOM,

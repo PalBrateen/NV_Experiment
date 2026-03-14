@@ -1,42 +1,48 @@
 #%% Initialization and Definition
 # reset
-import connectionConfig as concfg, matplotlib.pyplot as plt, numpy as np, time, dialog, ametekcontrol as amctrl, psutil, json, yaml, os, logging
-from PBcontrol import PulseBlaster, ns, ms, us, s, Inst
-from DAQcontrol import DAQ_write_pattern, AnalogOutputTask, AnalogInputTask
+from fileinput import filename
+import connectionConfig as concfg, matplotlib.pyplot as plt, numpy as np, time
+import dialog, psutil, json, yaml, os, logging, matplotlib as mpl, h5py
+from PBcontrol import PulseBlaster
+from DAQcontrol import AnalogInputTask, AnalogOutputTask#, DAQ_write_pattern
 from sequencecontrol import sequencecontrol
 from SGcontrol import SignalGenerator, SignalGenerator_sim
 from spinapi import ns, us, ms, Inst
-# from os.path import isdir, isfile; from os import makedirs
 from pathlib import Path
 from importlib import import_module
 # %matplotlib qt5
 plt.rcParams.update({'figure.max_open_warning': 0})     # No warnings on opening mult fig windows
 # def main():
+plt.style.use('dark_background')
+plt.rcParams['axes.prop_cycle'] = mpl.rcParamsOrig['axes.prop_cycle']
 
 global trial_run, f_number, instr, data, pb, ao_task, ai_task#, data_array_time
 expCfgFile = 'esr'+'_config'
 expCfg = import_module(expCfgFile)
 params = expCfg.params_dict
 
-params['test_field'] = [0,0,0]
+params['test_field'] = [25, 75, 0]        # 0.001 G = 100 nT
+# params['test_field'] = [0, 0, 0]
 
-trial_run = ['n','n']       # 1st=SG, 2nd=PB, 3rd=ametek
+trial_run = ['y','n']       # 1st=SG, 2nd=PB, 3rd=ametek
 seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
-plotPulseSequence = False
+plotPulseSequence = True
 
 load_pb_all_params = True if 'train' in expCfgFile else False
 reload_pb = False if 't1ms0_train' in expCfgFile else True
 
-# TODO: set up the logger #???
-fsplit = lambda b: (2870 - 2.8*b, 2870 + 2.8*b) 
+# TODO: set up the logger ???
+fsplit = lambda b: (2870 - 2.8*b, 2870 + 2.8*b)
 # test_field = test_field*np.array([np.sin(test_theta*np.pi/180)*np.cos(test_phi*np.pi/180), np.sin(test_theta*np.pi/180)*np.sin(test_phi*np.pi/180), np.cos(test_theta*np.pi/180)])
 
+# TODO: save a png of the plot in a common folder with file name
+# TODO: save a h5 file with the parameter - far better than putting the parameters in the yaml file!!
 seqctrl = sequencecontrol(params)
 ai_task: AnalogInputTask
 def initialize_instr(sequence):
-    global ao_task, pb#ai_task, 
+    global ao_task, pb #,ai_task, 
     # TODO: how to handle 'sequence' to PulseBlaster()
     sg = SignalGenerator_sim()
     
@@ -50,8 +56,8 @@ def initialize_instr(sequence):
         logging.exception(f"❌ Error in PB Init: {e}")
 
     try:
-        # ao_task = AnalogOutputTask()    # AO alreay configured here in __init__()
-        ao_task = None
+        ao_task = AnalogOutputTask(dev="P6363", channels=[0,1,2], coil='small_confocal')    # AO alreay configured here in __init__()
+        # ao_task = None
         # TODO: need to do this properly - how to init the ai task
         # ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-10, 10), channels=concfg.input_terminals, trigger_source=concfg.samp_clk_terminal)
         
@@ -62,12 +68,16 @@ def initialize_instr(sequence):
             # Do not initialize sg if it is a trial run or the sequence is present in the list ['aom_timing',]
             sg = SignalGenerator() if trial_run[0] == 'n' else sg
             if sg != '':
-                sg.enable_sg_output();
+                sg.enable_ntype(1)
                 print("✔ SG Output Enabled...")
-                sg.set_sg_amp(expCfg.MW_power)
-                sg.set_sg_freq(2.87e9)
-                sg.setup_sg_pulse_mod()
-                print("✔ SG Ext Pulse Mod Enabled...")
+                sg.set_amp(expCfg.MW_power)
+                sg.set_freq(params['mw']['freq'][0])
+                # sg.set_freq(2.7327e9)
+                # sg.setup_ext_pulse_mod()
+                sg.setup_sg_fm('external', dev=5e5)
+                # sg.setup_sg_am('external', dev=100)
+                sg.enable_modulation(1)
+                print("✔ SG Mod Enabled...")
         # else:
         #     sg = None
         # elif trial_run[0] == 'y':
@@ -86,13 +96,13 @@ def set_core_affinity():
     process.cpu_affinity([0, 1])
     print(f"✔ Process pinned to cores: {process.cpu_affinity()}")
 
-def close_all(sg=None, ao_task=None, ai_task=None):
+def close_all(sg=None, ao_task:AnalogOutputTask=None, ai_task:AnalogInputTask=None):
     """
     End the measurement. Closes all the instruments.
     """
     try:
         if (ao_task is not None):
-            print(f"🔃 AO closing:: status: {ao_task.task_state}")
+            print(f"🔃 AO closing:: status: {ao_task._task_state}")
             ao_task.set_outputs_to_constant([0,0,0])
             time.sleep(0.5)
             ao_task.__del__()
@@ -103,9 +113,9 @@ def close_all(sg=None, ao_task=None, ai_task=None):
         
         # if (trial_run[0] == 'n') and (sg is not None):
         if sg is not None:
-            sg.set_sg_freq(2.87e9)
-            sg.disable_sg_output()
-            sg.uninit_sg()
+            # sg.set_freq(2.87e9)
+            # sg.enable_ntype(0)
+            sg.uninit()
 
         # pb.pb_init();
         # if t_align_dc < 50:
@@ -113,7 +123,7 @@ def close_all(sg=None, ao_task=None, ai_task=None):
         # else:
         #     pb.run_only_daq(t_align_dc *ms)
         closed = True
-        pb.stop_sequence();
+        # pb.stop_sequence();
         pb.closePB();
         print("✔ Pulse Blaster closed...\x1b[0m")
         return True
@@ -124,7 +134,7 @@ def initialize_exp(instr):
     ###### Include trial run check so that the error plots are only displayed when it is not a trial run
     
     # Nscanpts = expCfg.N_scanPts
-    param = params['scan']['values'][0];    n_error=0
+    param = params['scan'][params['scan']['names'][0]]['values'];    n_error=0
     sequenceArgs = params['seq']['args']
     instructionList = []
     
@@ -134,7 +144,7 @@ def initialize_exp(instr):
         seqArgList = [param[seq_no_plot[-1]]]
         seqArgList.extend(sequenceArgs)     # Make a seqArgList with dummy 1st element... just to create it.. pore change hoye jabe..
 
-        [n_error, param] = seqctrl.param_err_check(instr, params['seq']['sequence'], params['pb']['channels'], seqArgList, param, len(param))
+        [n_error, param] = seqctrl.param_err_check(instr, params['seq']['sequence'], seqArgList, param, len(param))
         if n_error>0:
             print(f"❌ \x1b[1;37;41mErr: Check Sequences...\x1b[0m")
             print(f"✔ \x1b[38;2;250;0;0m'{str(n_error)} parameters removed...\x1b[0m")
@@ -151,11 +161,11 @@ def initialize_exp(instr):
         seqArgList = sequenceArgs
     
     # define 'Nscanpts' as the length of the 'param' variable...
-    params['scan']['Nscanpts'] = len(param)
-    params['scan']['values'][0] = param
+    params['scan'][params['scan']['names'][0]]['Nscanpts'] = len(param)
+    params['scan'][params['scan']['names'][0]]['values'] = param
 
-    if params['scan']['Nscanpts']>0:
-        print(f"▶ \x1b[38;2;250;100;10m{params['scan']['Nscanpts']}\x1b[0m scan pts")
+    if len(param)>0:
+        print(f"▶ \x1b[38;2;250;100;10m{len(param)}\x1b[0m scan pts")
     else:
         print("❌ \x1b[38;2;200;200;10mCheck sequences for subtle problems...\x1b[0m")
     
@@ -176,7 +186,7 @@ def initialize_exp(instr):
         pb.run_sequence_for_diode(instructionList)
         print("▶\x1b[38;2;50;250;50m----------PB Running----------\x1b[0m")
         if params['seq']['sequence'] not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq', 'aom_timing', 'T1ms0_train'] and trial_run[0] == 'n':
-            sg.set_sg_freq(params['mw']['freq'])
+            sg.set_freq(params['mw']['freq'])
     else:
         # instructionList = []
         print("▶\x1b[38;2;250;250;0m----------PB NOT Running----------\x1b[0m")
@@ -202,8 +212,10 @@ def read_details(sequence, n_channels, Nsamples_expCfg):
         reads_per_cyc = [1,1] if n_channels==2 else [1]
     # elif 'dig_mod' in sequence:
     #     reads_per_cyc = [expCfg.N_laser*2*2]      # not acquiring from 2 channels (APD, PD) at the moment
+    elif 'lia' in sequence:
+        reads_per_cyc = [1,1] if n_channels==2 else [1]
     else:
-        reads_per_cyc = [2,2] if n_channels==2 else [2]
+        reads_per_cyc = [2,2] if n_channels==2 else [1]
     daq_Nsamples = sum(reads_per_cyc)*Nsamples_expCfg
 
     return [reads_per_cyc, daq_Nsamples]
@@ -250,7 +262,7 @@ def prepare_for_saving():
     if not (Path.is_dir(file_dir)):
         Path.mkdir(file_dir)
     
-    datafilename = file_dir / f"{params['save']['savefileprefix']}_{folder_number}.npy"
+    datafilename = file_dir / f"{params['save']['savefileprefix']}_{folder_number}.h5"
 
     params['save']['savepath'] = file_dir
     params['save']['datafilename'] = datafilename
@@ -258,7 +270,7 @@ def prepare_for_saving():
         
     return folder_number
 
-def savefile(filename: Path, data) -> bool:
+def savefile(filename: Path, data, data_type:str='data') -> bool:
     """
     Saves data to a file in a format determined by the file extension.
     Supported formats: .npy, .json, .yaml, .txt, .csv
@@ -287,27 +299,29 @@ def savefile(filename: Path, data) -> bool:
     try:
         if 'npy' in filename.suffix:
             np.save(filename, data, allow_pickle=False)
-            print(f"✔  Saved to\x1b[38;2;100;250;50m {filename.name}\x1b[0m !!!")
             
         elif 'json' in filename.suffix:
             with open(filename, 'w') as f:
                 json.dump(convert_numpy_to_python(data), f, indent=4)
-            print(f"✔  Saved to\x1b[38;2;100;250;50m {filename.name}\x1b[0m !!!")
 
         elif 'yaml' in filename.suffix:
             with open(filename, 'w') as f:
                 yaml.dump(convert_numpy_to_python(data), f, indent=4, default_flow_style=False)
-            print(f"✔  Saved to\x1b[38;2;100;250;50m {filename.name}\x1b[0m !!!")
             
         elif 'txt' in filename.suffix:
             with open(filename, 'w') as f:
                 f.write(data)
-            print(f"✔  Saved to\x1b[38;2;100;250;50m {filename.name}\x1b[0m !!!")
 
         elif 'csv' in filename.suffix:
             np.savetxt(filename, data, delimiter=',')
-            print(f"✔  Saved to\x1b[38;2;100;250;50m {filename.name}\x1b[0m !!!")
 
+        elif 'h5' in filename.suffix or 'hdf5' in filename.suffix:
+            with h5py.File(filename, 'a') as f:
+                grp = f.require_group("data")
+                for run in range(data.shape[0]):
+                    grp.create_dataset(f"run_{run}", data=data[run])
+        
+        print(f"✔  Saved to\x1b[38;2;100;250;50m {filename.name}\x1b[0m !!!")
         return True
     except Exception as e:
         logging.exception(f"❌ Error saving file {filename.name}: {e}")
@@ -334,34 +348,37 @@ def acquire_data(Nsamples, parameter, sequence, seqArgList, trial):
     # setup next scan iteration (e.g. for ESR experiment, change microwave frequency; for T2 experiment, reprogram pulseblaster with new delay)
     if sequence in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:
         if trial[0] == 'n':
-            sg.set_sg_freq(parameter)
+            sg.set_freq(parameter)
     else:
         seqArgList[0] = parameter
     # _, instructionList = pbctrl.PB_program(instr,sequence,seqArgList)[0]
-    
-    # print(seqArgList)
-    # #notun ... eta lagbe
-    instructionList=[]
-    name, the_list = PulseBlaster.PB_program(instr, sequence, seqArgList)
-    # print(name)
-    # print(the_list)
-    for i in range(0, len(the_list)):
-        instructionList.append(the_list[i][0])
-    # print(instructionList)
+    if sequence == 'esr_seq' and i_scanpt==0:
+        # print(seqArgList)
+        # #notun ... eta lagbe
+        instructionList=[]
+        name, the_list = PulseBlaster.PB_program(instr, sequence, seqArgList)
+        # print(name)
+        # print(the_list)
+        for i in range(0, len(the_list)):
+            instructionList.append(the_list[i][0])
+        # print(instructionList)
 
-    # start = time.perf_counter_ns()
-    # print(i_scanpt+1,' / ',params['scan']['Nscanpts'])
-    # if i_scanpt == 1:
-    #     time.sleep(20)
-    # stop = time.perf_counter_ns()
-    # print('In acquire_data().. Starting sequence...')
-    pb.run_sequence_for_diode(instructionList)
-    # cts = []
+        # start = time.perf_counter_ns()
+        # print(i_scanpt+1,' / ',params['scan']['Nscanpts'])
+        # if i_scanpt == 1:
+        #     time.sleep(20)
+        # stop = time.perf_counter_ns()
+        # print('In acquire_data().. Starting sequence...')
+        pb.run_sequence_for_diode(instructionList)
+        # cts = []
     scan_start_time = time.perf_counter()   # time in seconds
     # cts = daqctrl.read_daq(ai_task, Nsamples,61*60)    #read DAQ
     # print(f'Nsamples = {Nsamples}')
     # print('Starting capture...')
-    cts = ai_task.read_daq(Nsamples, timeout=60)
+
+    cts = ai_task.read_daq(Nsamples, timeout=params['seq']['t_total(s)']*params['seq']['Nsamples']+5)
+    # cts = [np.mean(cts[int(2e6*1e-3)*i:int(2e6*1e-3)*(i+1)]) for i in range(params['daq']['ai']['daq_Nsamples'])]
+    
     scan_end_time = time.perf_counter()
     
     scan_time = (scan_end_time - scan_start_time)     # in seconds
@@ -378,7 +395,7 @@ def acquire_data_all_params(Nsamples, parameters, sequence, seqArgList, trial):
         instructionList.append(the_list[i][0])
     # print(instructionList)
 
-    Nsamples = Nsamples if reload_pb else Nsamples*params['scan']['Nscanpts']*params['scan']['Nruns']
+    Nsamples = Nsamples if reload_pb else Nsamples*params['scan'][params['scan']['names'][0]]['Nscanpts']*params['scan']['Nruns']
     # print(f"Nsamples = {Nsamples}")
     pb.run_sequence_for_diode(instructionList)
     
@@ -453,6 +470,7 @@ def plot_data(i_max, param, processed_data, live=False, ax=None):
         # ax[1].legend(['Contrast X', 'Contrast Y']) if len(concfg.input_terminals)>1 else plt.legend()
         ax[1].set_title('Plotting %d points' %(i_max))
     plt.tight_layout()
+    # plt.savefig(args, kwargs)
 
 # ----------------------------------------------------------------------------
 
@@ -463,7 +481,7 @@ if trial_run[0] == 'n':
 else:
     sg: SignalGenerator_sim
 
-print('🔄 \x1b[38;2;250;250;0mRunning '+params['save']['savefileprefix']+' sequence\x1b[0m')
+print(f'🔄\x1b[38;2;250;250;0m Running {params['save']['savefileprefix']} sequence @ {time.strftime("%H:%M:%S", time.localtime())}\x1b[0m')
 [sg, ao_task] = initialize_instr(params['seq']['sequence']) # type: ignore
 
 seqctrl.check_params()
@@ -472,7 +490,7 @@ instr = 'diode'
 
 # params['scan']['Nruns'] = Nruns #..........eta notun file e acche... kno??
 [seqArgList, instructionList] = initialize_exp(instr)
-pb.stop_sequence()
+# pb.stop_sequence()
 
 # Experiment operations (with all hardwares working)... ki korbo eta???
 # if trial_run == 'y':
@@ -486,10 +504,10 @@ print(f"▶ DAQ-Nsamples = {daq_Nsamples}")
 display_parameters = dialog.yesno_box(f"{params['save']['savefileprefix']} Parameters",
                                       (f"Channels\t: {str(concfg.input_terminals)} \n"
                                         f"Runs\t: {params['scan']['Nruns']}\n"
-                                        f"ScanPts\t: {params['scan']['Nscanpts']}\n"
+                                        f"ScanPts\t: {params['scan'][params['scan']['names'][0]]['Nscanpts']}\n"
                                         f"Samples\t: {params['seq']['Nsamples']}\n"
-                                        f"Start\t: {params['scan']['values'][0][0]/params['plot']['plotXaxisUnits']}\n"
-                                        f"End\t: {params['scan']['values'][0][-1]/params['plot']['plotXaxisUnits']}\n"
+                                        f"Start\t: {min(params['scan'][params['scan']['names'][0]]['values'])/params['plot']['plotXaxisUnits']}\n"
+                                        f"End\t: {max(params['scan'][params['scan']['names'][0]]['values'])/params['plot']['plotXaxisUnits']}\n"
                                         "Proceed ?")
                                     )
 closed = False
@@ -503,8 +521,8 @@ params['daq']['ai']['daq_Nsamples'] = daq_Nsamples
 params['daq']['reads_per_cyc'] = reads_per_cyc
 
 Nruns = params['scan']['Nruns']
-Nscanpts = params['scan']['Nscanpts']
-param = params['scan']['values'][0]
+Nscanpts = params['scan'][params['scan']['names'][0]]['Nscanpts']
+param = params['scan'][params['scan']['names'][0]]['values']
 
 scan_time: list = []
 run_start_time: float = 0.; save_flag: bool = False
@@ -513,9 +531,7 @@ data_array: np.ndarray = np.array([])
 if display_parameters == 'yes':    
     try:
         # if trial_run == 'n':
-        # ao_task = daqctrl.config_ao(dev="U9263")
-        # daqctrl.start_ao(ao_task, daqctrl.coil_calibration(test_field))
-        # ao_task.set_outputs_to_constant(output_field_in_gauss=test_field)
+        ao_task.set_outputs_to_constant(output_field_in_gauss=params['test_field'])
         # save_flag = False
         pb.run_sequence_for_diode(instructionList)        # Run the PB hardware
         print("✔ Initial Sequence Started...")
@@ -526,24 +542,40 @@ if display_parameters == 'yes':
         #TODO Clear up the mess in AnalogInputTask initialization
         if reload_pb:
             # ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-0.1, 0.1),
-            #                       channels=concfg.input_terminals, trigger_source=concfg.start_trig_terminal, samples_to_acquire=int(Nsamples))
-            ai_task = AnalogInputTask(voltage_range=(-0.2, 0.2), channels=concfg.input_terminals,
-                                      trigger_source=concfg.start_trig_terminal, samples_to_acquire=int(daq_Nsamples))
+            #                       channels=concfg.input_terminals, trigger_source=concfg.start_trig_terminal, samps_per_chan=int(Nsamples))
+            # without LIA
+            # ai_task = AnalogInputTask(voltage_range=(-0.2, 0.2), channels=concfg.input_terminals, sampling_source=concfg.samp_clk_terminal,
+            #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
+            
+            # ai_task = AnalogInputTask(channels=concfg.input_terminals, voltage_range=(-0.2, 0.2), 
+            #                           sampling_source='internal', sampling_rate=2e6, samps_per_chan=int(daq_Nsamples*2e6*1e-3),
+            #                           start_trigger_source=concfg.start_trig_terminal,
+            #                           pause_trigger_source=concfg.samp_clk_terminal,
+            #                           )
+            
+            # with LIA one sample per trigger
+            # ai_task = AnalogInputTask(voltage_range=(-10, 10), channels=concfg.input_terminals,
+            #                           sampling_rate=10e3, sampling_source=concfg.samp_clk_terminal,
+            #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
+            # with LIA multiple samples
+            ai_task = AnalogInputTask(voltage_range=(-10, 10), channels=concfg.input_terminals,
+                                      sampling_rate=10e3, sampling_source='',
+                                      start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
         else:
             if load_pb_all_params:
                 ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-0.2, 0.2),
-                                  channels=concfg.input_terminals, trigger_source=concfg.start_trig_terminal,
-                                  samples_to_acquire=int(daq_Nsamples*Nscanpts*Nruns))
+                                  channels=concfg.input_terminals, start_trigger_source=concfg.start_trig_terminal,
+                                  samps_per_chan=int(daq_Nsamples*Nscanpts*Nruns))
         # print(f"Samples per channel = {ai_task._task.timing.samp_quant_samp_per_chan}")
 
         print(f"▶ DAQ configured for {params['seq']['Nsamples']} samples...")
         print(f'▶ {reads_per_cyc[0]} samples in each cycles...')
-        data_array = np.zeros((params['scan']['Nruns'], params['scan']['Nscanpts'],
+        data_array = np.zeros((params['scan']['Nruns'], params['scan'][params['scan']['names'][0]]['Nscanpts'],
                                params['daq']['ai']['daq_Nsamples']*len(concfg.input_terminals)))
         # data_list_runs = []
 
         # <<<<<<<<---------------------Run experiment--------------------->>>>>>>>
-        print("🔄------Acquisition Started------")
+        print(f"🔄 Acquisition Started @ {time.strftime("%H:%M:%S", time.localtime())}")
         run_start_time = time.perf_counter()        # in seconds
         if reload_pb:
             for i_run in range(0, params['scan']['Nruns']):
@@ -552,17 +584,19 @@ if display_parameters == 'yes':
                 # data_array = np.zeros((params['scan']['Nscanpts'],Nsamples*len(concfg.input_terminals)))
                 scan_time_list = []   # time (in seconds) for each scannedParam
                 # print("",i_run+1,'/',params['scan']['Nruns'])
-                data_list = []
-                for i_scanpt in range (0, params['scan']['Nscanpts']):
+                # data_list = []
+                for i_scanpt in range (0, params['scan'][params['scan']['names'][0]]['Nscanpts']):
                     # if i_scanpt>0:
                     #     break
-                    print(i_scanpt+1,' / ',params['scan']['Nscanpts'],': ',param[i_scanpt])
+                    if i_scanpt % 10 == 0:
+                        print(i_scanpt+1,' / ',params['scan'][params['scan']['names'][0]]['Nscanpts'],': ',param[i_scanpt])
+                        print(f"Waiting: {params['seq']['t_total(s)']*params['seq']['Nsamples']}s")
                     [cts, scan_time] = acquire_data(daq_Nsamples, param[i_scanpt], params['seq']['sequence'],
                                                     seqArgList+[params['pb']['channels']], trial_run)
                     # in general for multi-channel acquisition, cts is a list of lists... this needs to be taken care
                     # the sig1,ref1,sig2,ref2,... order has not been changed cts and data_array
-                    data_array[i_run, i_scanpt,:] = np.ravel(np.array(cts)) # type: ignore
-                    data_list.append(np.array(cts))
+                    data_array[i_run, i_scanpt,:] = np.ravel(np.array(cts))         # type: ignore
+                    # data_list.append(np.array(cts))
                     scan_time_list.append(scan_time)
                 # data_list_runs.append(data_list)
         else:
@@ -570,7 +604,7 @@ if display_parameters == 'yes':
             if load_pb_all_params:
                 [cts, scan_time] = acquire_data_all_params(daq_Nsamples, param, params['seq']['sequence'], seqArgList, trial_run)
                 data_array = np.array(cts).reshape(Nruns, Nscanpts, daq_Nsamples)
-                i_scanpt = params['scan']['Nscanpts']
+                i_scanpt = params['scan'][params['scan']['names'][0]]['Nscanpts']
             scan_time_list.append(scan_time) # type: ignore
 
         run_end_time = time.perf_counter()          # in seconds
@@ -654,7 +688,7 @@ if display_parameters == 'yes':
                 else print(f"▶ len(cts) = \x1b[38;2;250;150;50m{len(cts)}\x1b[0m")
         # Save parameters only if there was one save operation
         if save_flag:
-            params['scan']["Nscanpts"] = i_scanpt+1        # expParamList[1] -> value of N_scanPts
+            params['scan'][params['scan']['names'][0]]["Nscanpts"] = i_scanpt+1        # expParamList[1] -> value of N_scanPts
             params['scan']["Nruns"] = i_run+1           # expParamList[3] -> value of Nruns
             params['daq']['ai'].update({key: value for key, value in vars(ai_task).items()
                                         if not key.startswith('_')})
@@ -666,6 +700,8 @@ if display_parameters == 'yes':
             params['scan']['exec_time(s)'] = exec_time
             params['scan']['scan_time(ms)'] = [f"{num*1e3:0.2f}" for num in [np.mean(scan_time_list), np.std(scan_time_list)]]
             params['pb'].update(concfg.params)
+            for name in params['scan']['names']:
+                del params['scan'][name]['values']
             savefile(params['save']['paramfilename'], params)
 
         # scan_time in seconds; exec_time in seconds      
@@ -714,3 +750,4 @@ else:
 #     datafile.close()
 #     print(" Data saved to\x1b[38;2;100;250;50m %s_%s\x1b[0m !!!" % (expCfg.savefileprefix, f_number))
 #     return True
+# %%

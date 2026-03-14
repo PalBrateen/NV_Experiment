@@ -523,19 +523,25 @@ class Dcam:
 
         aFrame = DCAMBUF_FRAME()
         aFrame.iFrame = iFrame
-
         aFrame.buf = npBuf.ctypes.data_as(c_void_p)
         aFrame.rowbytes = self.__bufframe.rowbytes
         aFrame.type = self.__bufframe.type
         aFrame.width = self.__bufframe.width
         aFrame.height = self.__bufframe.height
-        # how to put the timestamp information??
 
+        # Important: Call dcambuf_copyframe BEFORE accessing timestamp data
+        # The API populates timestamp, framestamp, and camerastamp during this call
+        # dcambuf_copyframe populates timestamp, framestamp, and camerastamp
         ret = self.__result(dcambuf_copyframe(self.__hdcam, byref(aFrame)))
         if ret is False:
             return False
         # print(aFrame)
         # print(npBuf)
+
+        # Now aFrame contains the timestamp information populated by dcambuf_copyframe
+        # The timestamp, framestamp, and camerastamp fields are now available
+        # aFrame now contains complete metadata including timestamps
+
         return (aFrame, npBuf)
 
     def buf_getframedata(self, iFrame):
@@ -558,6 +564,24 @@ class Dcam:
         # what are the framestamp and timestamp values??? Check this from CPP or Labview..
         # need a function to return the metadata.. this is buf_getframedata -> data only :)
 
+    def buf_getframedata_with_metadata(self, iFrame):
+        """Return NumPy buffer with metadata.
+        Return NumPy buffer of image data specified by iFrame along with timestamp metadata.
+
+        Arg:
+            iFrame (int): Index of target frame.
+
+        Returns:
+            (npBuf, timestamp, framestamp, camerastamp): Tuple of image data and metadata.
+            bool: False if error happens. lasterr() returns the DCAMERR value.
+        """
+        ret = self.buf_getframe(iFrame)
+        if ret is False:
+            return False
+        
+        aFrame, npBuf = ret
+        return (npBuf, aFrame.timestamp, aFrame.framestamp, aFrame.camerastamp)
+
     def buf_getlastframedata(self):
         """Return NumPy buffer of last updated.
         Return NumPy buffer of image data of last updated frame.
@@ -567,6 +591,16 @@ class Dcam:
             bool: False if error happens. lasterr() returns the DCAMERR value.
         """
         return self.buf_getframedata(-1)
+
+    def buf_getlastframedata_with_metadata(self):
+        """Return NumPy buffer of last updated frame with metadata.
+        Return NumPy buffer and metadata of last updated frame.
+
+        Returns:
+            (npBuf, timestamp, framestamp, camerastamp): Tuple of image data and metadata.
+            bool: False if error happens. lasterr() returns the DCAMERR value.
+        """
+        return self.buf_getframedata_with_metadata(-1)
 
     # dcamcap functions
 
