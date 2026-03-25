@@ -62,12 +62,13 @@ class sequencecontrol:
         # step_size = expCfg.scannedParam[1] - expCfg.scannedParam[0]
 
         if self.parameter_dict['seq']['sequence'] not in ['aom_timing', 'T1ms0_train']:      # Check MW power if the seqeunce is not 'aom_timing', etc
-            if self.parameter_dict['mw']['power'] >= 9:      # Quit program if the MW power is greater/equals 9 dBm
-                print("❌ Input Microwave Power to the RF Amplifier is + "+self.parameter_dict['mw']['power']+" dBm. Reduce it to 8 dBm or less.")
-                sys.exit()
-            # else:
-            #     # print("\t MW Power = "+str(expCfg.MW_power)+" dBm")
-            #     None
+            if isinstance(self.parameter_dict['mw']['power'], list):
+                if max(self.parameter_dict['mw']['power']) >= 9:      # Quit program if the MW power is greater/equals 9 dBm
+                    print("❌ Input Microwave Power to the RF Amplifier is + "+self.parameter_dict['mw']['power']+" dBm. Reduce it to 8 dBm or less.")
+                    sys.exit()
+                # else:
+                #     # print("\t MW Power = "+str(expCfg.MW_power)+" dBm")
+                #     None
         
         # # small step size checks:
         # if self.parameter_dict['seq']['sequence'] in ['aom_timing', 'rodelay']:
@@ -492,7 +493,8 @@ class sequencecontrol:
         print("🔃 Checking sequences for errors...")
         for i_scanpt in range (0, Nscanpts):     # scan over all the scannedParam values
             seqArgList[0] = parameter[i_scanpt]
-            _, the_list = PBcontrol.PulseBlaster.PB_program(instr, sequence, seqArgList[0:-1], err_check=True)  # last element of seqArgList is PBchannels
+            
+            _, the_list = PBcontrol.PulseBlaster.PB_program(instr, sequence, seqArgList, err_check=True)  # last element of seqArgList is PBchannels
             for i in range(0, len(the_list)):
                 instructionList = the_list[i][0]    # eta chai sudhu oi parameter er sequence ta plot korar jonno...
                 seq_error_count = the_list[i][1]

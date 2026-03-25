@@ -22,9 +22,9 @@ expCfg = import_module(expCfgFile)
 params = expCfg.params_dict
 
 params['test_field'] = [25, 75, 0]        # 0.001 G = 100 nT
-# params['test_field'] = [0, 0, 0]
+params['test_field'] = [0, 0, 0]
 
-trial_run = ['y','n']       # 1st=SG, 2nd=PB, 3rd=ametek
+trial_run = ['n','n']       # 1st=SG, 2nd=PB, 3rd=ametek
 seq_no_plot = [-1]
 voltage_unit = 1      # mV voltage... Convert the voltages in cts to mV unit
 seq_plot_dpi = 100                      # The dpi of the displayed pulse sequence plot
@@ -74,8 +74,8 @@ def initialize_instr(sequence):
                 sg.set_freq(params['mw']['freq'][0])
                 # sg.set_freq(2.7327e9)
                 # sg.setup_ext_pulse_mod()
-                sg.setup_sg_fm('external', dev=5e5)
-                # sg.setup_sg_am('external', dev=100)
+                # sg.setup_sg_fm('external', dev=5e5)
+                sg.setup_sg_am('external', dev=100)
                 sg.enable_modulation(1)
                 print("✔ SG Mod Enabled...")
         # else:
@@ -143,8 +143,9 @@ def initialize_exp(instr):
     if params['seq']['sequence'] not in ['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']:   # for sequences except ESR, set MW frequency
         seqArgList = [param[seq_no_plot[-1]]]
         seqArgList.extend(sequenceArgs)     # Make a seqArgList with dummy 1st element... just to create it.. pore change hoye jabe..
-
-        [n_error, param] = seqctrl.param_err_check(instr, params['seq']['sequence'], seqArgList, param, len(param))
+        # seqArgList.append([params['pb']['channels']])
+        
+        [n_error, param] = seqctrl.param_err_check(instr, params['seq']['sequence'], seqArgList+[params['pb']['channels']], param, len(param))
         if n_error>0:
             print(f"❌ \x1b[1;37;41mErr: Check Sequences...\x1b[0m")
             print(f"✔ \x1b[38;2;250;0;0m'{str(n_error)} parameters removed...\x1b[0m")
@@ -352,31 +353,32 @@ def acquire_data(Nsamples, parameter, sequence, seqArgList, trial):
     else:
         seqArgList[0] = parameter
     # _, instructionList = pbctrl.PB_program(instr,sequence,seqArgList)[0]
-    if sequence == 'esr_seq' and i_scanpt==0:
-        # print(seqArgList)
-        # #notun ... eta lagbe
-        instructionList=[]
-        name, the_list = PulseBlaster.PB_program(instr, sequence, seqArgList)
-        # print(name)
-        # print(the_list)
-        for i in range(0, len(the_list)):
-            instructionList.append(the_list[i][0])
-        # print(instructionList)
+    # if sequence == 'esr_seq' and i_scanpt==0:
+    # print(seqArgList)
+    # #notun ... eta lagbe
+    instructionList=[]
+    name, the_list = PulseBlaster.PB_program(instr, sequence, seqArgList)
+    # print(name)
+    # print(the_list)
+    for i in range(0, len(the_list)):
+        instructionList.append(the_list[i][0])
+    # print(instructionList)
 
-        # start = time.perf_counter_ns()
-        # print(i_scanpt+1,' / ',params['scan']['Nscanpts'])
-        # if i_scanpt == 1:
-        #     time.sleep(20)
-        # stop = time.perf_counter_ns()
-        # print('In acquire_data().. Starting sequence...')
-        pb.run_sequence_for_diode(instructionList)
-        # cts = []
+    # start = time.perf_counter_ns()
+    # print(i_scanpt+1,' / ',params['scan']['Nscanpts'])
+    # if i_scanpt == 1:
+    #     time.sleep(20)
+    # stop = time.perf_counter_ns()
+    # print('In acquire_data().. Starting sequence...')
+    pb.run_sequence_for_diode(instructionList)
+    # cts = []
     scan_start_time = time.perf_counter()   # time in seconds
     # cts = daqctrl.read_daq(ai_task, Nsamples,61*60)    #read DAQ
     # print(f'Nsamples = {Nsamples}')
     # print('Starting capture...')
 
-    cts = ai_task.read_daq(Nsamples, timeout=params['seq']['t_total(s)']*params['seq']['Nsamples']+5)
+    # cts = ai_task.read_daq(Nsamples, timeout=params['seq']['t_total(s)']*params['seq']['Nsamples']+5)
+    cts = ai_task.read_daq(Nsamples, timeout=120)
     # cts = [np.mean(cts[int(2e6*1e-3)*i:int(2e6*1e-3)*(i+1)]) for i in range(params['daq']['ai']['daq_Nsamples'])]
     
     scan_end_time = time.perf_counter()
@@ -457,10 +459,10 @@ def plot_data(i_max, param, processed_data, live=False, ax=None):
     if ax is None:
         fig, ax = plt.subplots(1,2, num=time.strftime(" [%H:%M:%S]", time.localtime()), figsize=(10,5))
         
-    ax[0].plot([x/x_unit for x in xValues], mean_sig[0:i_max], '.-', label='Sig')
+    ax[0].plot([x/x_unit for x in xValues], mean_sig[0:i_max], '.', label='Sig')
     if params['seq']['sequence'].lower() not in ['t1ms0_train']:
         mean_ref, contrast = processed_data[1:]
-        ax[0].plot([x/x_unit for x in xValues], mean_ref[0:i_max], '.-', label='Ref')
+        ax[0].plot([x/x_unit for x in xValues], mean_ref[0:i_max], '.', label='Ref')
         # plt.legend(['Sig X', 'Sig Y', 'Ref X', 'Ref Y']) if len(concfg.input_terminals)>1 else plt.legend(['Sig','Ref']) 
         # ax[0].legend()
         ax[0].set_xlabel(x_label)
@@ -541,8 +543,11 @@ if display_parameters == 'yes':
         
         #TODO Clear up the mess in AnalogInputTask initialization
         if reload_pb:
-            # ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-0.1, 0.1),
-            #                       channels=concfg.input_terminals, trigger_source=concfg.start_trig_terminal, samps_per_chan=int(Nsamples))
+            ai_task = AnalogInputTask(channels=concfg.input_terminals, voltage_range=(-10, 10),
+                                      sampling_rate=concfg.daq_max_samp_rate, sampling_source=concfg.samp_clk_terminal,
+                                      samps_per_chan=int(daq_Nsamples),
+                                      start_trigger_source=concfg.start_trig_terminal,
+                                      )
             # without LIA
             # ai_task = AnalogInputTask(voltage_range=(-0.2, 0.2), channels=concfg.input_terminals, sampling_source=concfg.samp_clk_terminal,
             #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
@@ -558,9 +563,9 @@ if display_parameters == 'yes':
             #                           sampling_rate=10e3, sampling_source=concfg.samp_clk_terminal,
             #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
             # with LIA multiple samples
-            ai_task = AnalogInputTask(voltage_range=(-10, 10), channels=concfg.input_terminals,
-                                      sampling_rate=10e3, sampling_source='',
-                                      start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
+            # ai_task = AnalogInputTask(voltage_range=(-10, 10), channels=concfg.input_terminals,
+            #                           sampling_rate=10e3, sampling_source='',
+            #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
         else:
             if load_pb_all_params:
                 ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-0.2, 0.2),
@@ -588,9 +593,9 @@ if display_parameters == 'yes':
                 for i_scanpt in range (0, params['scan'][params['scan']['names'][0]]['Nscanpts']):
                     # if i_scanpt>0:
                     #     break
-                    if i_scanpt % 10 == 0:
-                        print(i_scanpt+1,' / ',params['scan'][params['scan']['names'][0]]['Nscanpts'],': ',param[i_scanpt])
-                        print(f"Waiting: {params['seq']['t_total(s)']*params['seq']['Nsamples']}s")
+                    # if i_scanpt % 10 == 0:
+                    print(i_scanpt+1,' / ',params['scan'][params['scan']['names'][0]]['Nscanpts'],': ',param[i_scanpt])
+                        # print(f"Waiting: {params['seq']['t_total(s)']*params['seq']['Nsamples']}s")
                     [cts, scan_time] = acquire_data(daq_Nsamples, param[i_scanpt], params['seq']['sequence'],
                                                     seqArgList+[params['pb']['channels']], trial_run)
                     # in general for multi-channel acquisition, cts is a list of lists... this needs to be taken care

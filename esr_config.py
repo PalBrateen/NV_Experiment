@@ -3,7 +3,7 @@
 from spinapi import ns,us,ms
 from SGcontrol import Hz, kHz, MHz, GHz
 import os, numpy as np
-from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, lia, camera
+from connectionConfig import PBclk, laser, samp_clk, start_trig, MW, lia1, camera
 
 clk_cyc = 1e3/PBclk #in ns
 MW_power = -24         # [dBm]
@@ -11,17 +11,17 @@ MW_power = -24         # [dBm]
 scan = {
     'freq': {
         # 'range': [3.015 *GHz, 3.032 *GHz],
-        'range': [2.9275 *GHz, 2.944 *GHz],
+        # 'range': [2.9275 *GHz, 2.944 *GHz],
         # 'range': [2.74 *GHz, 3. *GHz],
-        # 'range': [2.82 *GHz, 2.92 *GHz],
+        'range': [2.82 *GHz, 2.92 *GHz],
         # 'range': [3.02732 *GHz],
         # 'range': None,
         
         # 'range': [2.62 *GHz, 3.12 *GHz],
         # 'range': [2.995 *GHz, 3.025 *GHz],
         
-        'step': 0.05 *MHz,
-        # 'step': 1 *MHz,
+        # 'step': 0.05 *MHz,
+        'step': 1 *MHz,
         # 'step': None,
 
         # 'Nscanpts': None,
@@ -29,12 +29,12 @@ scan = {
         'shuffle': False,
         },
 
-    # 'mw_power': {
-        # 'range': [0, 10],       # [start, end] power in dBm
-        # 'step': 1,              # step in dBm
+    'mw_power': {
+        'range': [-24, -20],       # [start, end] power in dBm
+        'step': 4,              # step in dBm
         # 'Nscanpts': 11,
         # 'values': None,
-        # }
+        }
     }
 
 # Sequence parameters:----------------------------------------------------
@@ -53,7 +53,7 @@ sequenceArgs = [t_AOM]         #Sequence args
 # Nsamples = 10
 Nsamples = int((t_AOM - 40*ms) /ms*1e-3 *10e3)
 # Nsamples = int( 2*60 *10e3 )           # Number of FL samples to take at each frequency point
-Nruns = 1                 # Number of averaging runs
+Nruns = 2                 # Number of averaging runs
 
 # TODO: DAQ AI
 # daq = {
@@ -70,7 +70,7 @@ PBchannels = {'samp':samp_clk,
               'laser':laser,
               'start':start_trig,
               #, 'camera': camera,
-              'lia': lia,
+              # 'lia1': lia1,
             }
 
 ## ------------------------------------------------------------
@@ -130,6 +130,21 @@ else:
 if  scan['freq']['shuffle']:
     np.random.shuffle(scan['freq']['values'])
 
+input_range = scan['mw_power']['range']
+if input_range is not None:
+    scan_start = input_range[0]
+    scan_end = input_range[1] if len(input_range)>1 else scan_start
+
+    if scan['mw_power'].get('Nscanpts', None) is None:
+        scan_step = scan['mw_power']['step']
+        scan['mw_power']['Nscanpts'] = round((scan_end - scan_start)/scan_step + 1)
+
+    elif scan['mw_power'].get('step', None) is None:
+        Nscanpts = scan['mw_power']['Nscanpts']
+        scan['mw_power']['step'] = (scan_end - scan_start)/(Nscanpts - 1) if Nscanpts>1 else 0
+    
+    scan['mw_power']['values'] = list(np.linspace(scan_start, scan_end, scan['mw_power']['Nscanpts'], endpoint=True))
+
 PBchannels = dict(sorted(PBchannels.items(), key=lambda item: item[1]))
 
 seq_times = {
@@ -159,7 +174,7 @@ def update_params_dict():
 
     add_params = {
         'mw': {
-            'power': MW_power if 'mw_power' not in params['scan']['names'] else [],
+            'power': MW_power if 'mw_power' not in params['scan']['names'] else [], #[np.min(scan['mw_power']['values'])],
             'freq': scan['freq']['values'] if 'freq' not in params['scan']['names'] else [np.min(scan['freq']['values'])],                
         },
         

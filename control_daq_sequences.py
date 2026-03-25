@@ -542,7 +542,7 @@ def make_rabi_seq_IQ(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag, IQpadding):
 
 
 #------------------------------------------------------------------------------
-def make_rabi_seq(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
+def make_rabi_seq(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag, pb_channels):
     """
     Make pulse sequence for Rabi oscillations
 
@@ -573,29 +573,30 @@ def make_rabi_seq(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
     seq_dur = (2*t_drive + 2*t_AOM) if (2*t_drive + 2*t_AOM) > (2*t_drive+t_AOM+AOM_lag+t_ro_delay+pulse_width) else (2*t_drive+t_AOM+AOM_lag+t_ro_delay+pulse_width)
     
     # laser_channel = PBchannel(laser, [t_drive],[])
-    laser_channel = PBchannel(laser, [t_drive, 2*t_drive+t_AOM], [t_AOM,t_AOM])
-    start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
+    laser_channel = PBchannel(pb_channels.get('laser',-1), [t_drive, 2*t_drive+t_AOM], [t_AOM,t_AOM])
+    start_trig_channel = PBchannel(pb_channels.get('start',-1), [0], [pulse_width])
     # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
     allPBchannels = []
     if t_MW <= 5*clk_cyc and t_MW > 0:
         # (PBchannel) for MW pulse
-        MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag], [5*clk_cyc])
+        MWchannel = PBchannel(pb_channels.get('mw',-1), [0*us+AOM_lag-MW_lag], [5*clk_cyc])
         # SHORT PULSE duration
         shortpulseFLAG = int((t_MW/2)*ONE_PERIOD)
         shortPulseChannel = PBchannel(shortpulseFLAG, [0*us+AOM_lag-MW_lag], [5*clk_cyc])     # (PBchannel) for SHORT MW pulse
         allPBchannels = [shortPulseChannel, MWchannel]  # Short pulse feature
     else:
         # MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag], [t_MW])
-        MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag], [t_MW])
+        MWchannel = PBchannel(pb_channels.get('mw',-1), [0*us+AOM_lag-MW_lag], [t_MW])
         allPBchannels = [MWchannel]
     
     # conv_clk_channel = PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
     # conv_clk_channel = PBchannel(conv_clk, [0], [])
-    samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0], apd_pulse[1]], [pulse_width for i in range(0,len(apd_pulse))])
-    bx_channel = PBchannel(bx, [0], [seq_dur])
-    by_channel = PBchannel(by, [0], [seq_dur])
-    bz_channel = PBchannel(bz, [0], [seq_dur])
-    allPBchannels.extend([laser_channel, samp_clk_channel, start_trig_channel, bx_channel, by_channel, bz_channel])
+    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [apd_pulse[0], apd_pulse[1]], [pulse_width for i in range(0,len(apd_pulse))])
+    # bx_channel = PBchannel(bx, [0], [seq_dur])
+    # by_channel = PBchannel(by, [0], [seq_dur])
+    # bz_channel = PBchannel(bz, [0], [seq_dur])
+    
+    allPBchannels.extend([laser_channel, samp_clk_channel, start_trig_channel])
     # allPBchannels.extend([conv_clk_channel])
     # print(allPBchannels)
     return allPBchannels
