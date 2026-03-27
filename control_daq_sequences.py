@@ -760,7 +760,7 @@ def make_echo_seq_MW(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, M
     return allPBchannels
 
 #------------------------------------------------------------------------------
-def make_echo_seq_FL(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi):
+def make_echo_seq_FL(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi, pb_channels):
     """ Spin-echo seq. 
     Ref = Saturated FL"""
     seq_start_delay = 1*us      # = t_AOM_init_pulse
@@ -784,23 +784,26 @@ def make_echo_seq_FL(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, M
     return allPBchannels
 
 #------------------------------------------------------------------------------
-def make_ramsey_seq_MW(t_precession, t_AOM, ro_delay, AOM_lag, MW_lag, t_piby2):
+def make_ramsey_seq_MW(t_precession, t_AOM, ro_delay, AOM_lag, MW_lag, t_piby2, pb_channels):
     t_precession = t_precession + 2*t_piby2     # increase the actual laser off time to accomodate the non-zero width of the pi/2 pulses so that the actual precession time is as defined by the param variable of mainControl
     apd_pulse = [t_precession+AOM_lag+ro_delay, 2*t_precession+t_AOM+AOM_lag+ro_delay]
-    laser_channel = PBchannel(laser, [t_precession, 2*t_precession+t_AOM], [t_AOM, t_AOM])
-    start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
-    MWchannel = PBchannel(MW, [AOM_lag-MW_lag, t_precession+AOM_lag-MW_lag-t_piby2], [t_piby2, t_piby2])
+
+    allPBchannels = []
+    allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [t_precession, 2*t_precession+t_AOM], [t_AOM, t_AOM]))
+                         
+    allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [pulse_width]))
+
+    allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [AOM_lag-MW_lag, t_precession+AOM_lag-MW_lag-t_piby2], [t_piby2, t_piby2]))
     
     # samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-pulse_width,apd_pulse[1]-pulse_width], [pulse_width for i in range(0,2)])
     # conv_clk_channel = PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
-    samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0], apd_pulse[1]], [pulse_width for i in range(0,2)])
+
+    allPBchannels.append(PBchannel(pb_channels.get('samp',-1), [apd_pulse[0], apd_pulse[1]], [pulse_width for i in range(0,2)]))
     
-    allPBchannels = [MWchannel, laser_channel,samp_clk_channel, start_trig_channel]
-    # allPBchannels.extend([conv_clk_channel])
     return allPBchannels
 
-def make_ramsey_seq_FL(t_delay, t_AOM, ro_delay, AOM_lag, MW_lag, t_piby2):
-    """ Spin-echo seq. 
+def make_ramsey_seq_FL(t_delay, t_AOM, ro_delay, AOM_lag, MW_lag, t_piby2, pb_channels):
+    """ Ramsey seq. 
     Ref = Saturated FL"""
     seq_start_delay = 1*us      # = t_AOM_init_pulse
     # daq_ref_pulse = seq_start_delay + 5*us#dur_AOM + AOM_lag - (1000)*ns      For ref pulse ahead of signal pulse
@@ -811,15 +814,15 @@ def make_ramsey_seq_FL(t_delay, t_AOM, ro_delay, AOM_lag, MW_lag, t_piby2):
     daq_ref_pulse = t_AOM_readout_pulse + 7*us
     apd_pulse = [daq_sig_pulse, daq_ref_pulse]
     
-    laser_channel = PBchannel(laser, [seq_start_delay, t_AOM_readout_pulse], [t_AOM,t_AOM])
-    start_trig_channel = PBchannel(start_trig, [seq_start_delay], [pulse_width])
-    MWchannel = PBchannel(MW, [MW_pulse_start-MW_lag,  MW_pulse_start+t_delay-MW_lag-t_piby2], [t_piby2 for i in range(0,2)])
+    allPBchannels = []
+    allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [seq_start_delay, t_AOM_readout_pulse], [t_AOM,t_AOM]))
+    allPBchannels.append(PBchannel(pb_channels.get('start',-1), [seq_start_delay], [pulse_width]))
+    allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [MW_pulse_start-MW_lag,  MW_pulse_start+t_delay-MW_lag-t_piby2], [t_piby2 for i in range(0,2)]))
     
-    samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-pulse_width, apd_pulse[1]-pulse_width], [pulse_width for i in range(0,2)])
+    allPBchannels.append(PBchannel(pb_channels.get('samp',-1), [apd_pulse[0]-pulse_width, apd_pulse[1]-pulse_width], [pulse_width for i in range(0,2)]))
     
-    conv_clk_channel = PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
+    # allPBchannels.append(PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)]))
     
-    allPBchannels = [MWchannel, laser_channel, samp_clk_channel, start_trig_channel, conv_clk_channel]
     return allPBchannels
 #------------------------------------------------------------------------------
 # def make_rabi_seq(t_MW, t_AOM, t_ro_delay):
@@ -901,7 +904,7 @@ def make_ramsey_seq_FL(t_delay, t_AOM, ro_delay, AOM_lag, MW_lag, t_piby2):
     #    PBchannel(MW,[100],[500]) means channelNumber 32 will be turned ON at 100ns (starttime) for a duration of 500ns.
     #    PBchannel(AOM,[10,200],[2000,350]) means channelNumber 16 will be turned ON at 10ns for 2us and again turned ON at 200ns for 350ns.
 
-def make_rodelayscan_seq(rodelay, dur_AOM, AOM_lag, delay):
+def make_rodelayscan_seq(rodelay, dur_AOM, AOM_lag, delay, pb_channels):
     seq_start_delay = 1*us      # = t_AOM_init_pulse
     
     daq_ref_pulse = seq_start_delay + dur_AOM + AOM_lag # - (600)*ns
@@ -909,12 +912,35 @@ def make_rodelayscan_seq(rodelay, dur_AOM, AOM_lag, delay):
     daq_sig_pulse = t_AOM_readout_pulse + AOM_lag + rodelay
     # tot_time = 
     
-    laser_channel = PBchannel(laser, [seq_start_delay, t_AOM_readout_pulse], [dur_AOM, dur_AOM])
-    start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
-    samp_clk_channel = PBchannel(samp_clk, [daq_ref_pulse, daq_sig_pulse], [pulse_width, pulse_width])
+    laser_channel = PBchannel(pb_channels.get('laser',-1), [seq_start_delay, t_AOM_readout_pulse], [dur_AOM, dur_AOM])
+    start_trig_channel = PBchannel(pb_channels.get('start',-1), [0], [pulse_width])
+    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [daq_ref_pulse, daq_sig_pulse], [pulse_width, pulse_width])
     
     allPBchannels = [laser_channel, start_trig_channel, samp_clk_channel]
     return allPBchannels
+
+def make_t1ms0_train_sequence(relax_times, dur_AOM, AOM_lag, rodelay, pb_channels):
+    """Generate the pulse sequence train for fast T1 measurement.
+    Define here all the positions of the laser and readout triggers using arrays so that the whole definition happens here.
+    
+    DO NOT leave anything for other functions. The caller method should behave exactly the same for all functions.
+
+    """
+    laser_triggers = [0]
+    for index in range(len(relax_times)-1):
+        laser_triggers.append((index + 1) * dur_AOM + sum(relax_times[0 : (index + 1)]))
+
+    samp_triggers = [laser_trigger + AOM_lag for laser_trigger in laser_triggers]
+    del samp_triggers[0]
+
+    allPBchannels = []
+    allPBchannels.append(PBchannel(pb_channels.get('laser',-1), laser_triggers, [dur_AOM]*len(laser_triggers)))
+    
+    allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [pulse_width]))
+
+    allPBchannels.append(PBchannel(pb_channels.get('samp',-1), samp_triggers, [rodelay]*len(samp_triggers)))
+
+    pass
 
 def make_t1_ms0_seq_FL(relax_time, dur_AOM, AOM_lag, rodelay, MW_lag, t_pi):
     """

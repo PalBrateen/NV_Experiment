@@ -2,7 +2,6 @@
 #%%
 from ctypes import * # type: ignore
 from spinapi import *
-# from sequencecontrol import sequencecontrol
 import sequencecontrol
 import numpy as np, connectionConfig as concfg, sys, time
 
@@ -25,7 +24,6 @@ class PulseBlaster:
         # programmed    - after pb_start_programming() pb_stop_programming()
         # running       - after pb_start()
         # stopped       - after pb_stop()
-    #     self._seqctrl: sequencecontrol  # Will be injected
     
     # def set_sequencecontrol(self, seqctrl_obj):
     #     self._seqctrl = seqctrl_obj
@@ -167,8 +165,7 @@ class PulseBlaster:
         """
         # options: cam, cam_level1, cam_levelm, cam_timeseries, cam_timeseries_trigger_ao, cam_syncm_trigger_ao_ac, cam_syncm_trigger_ao_dc, cam_levelm_trigger_ao_ac, cam_levelm_trigger_ao_dc
         # self.parameter_dict['pb']['instr'] = instr        # maybe this can sit outside
-
-        # self.seqctrl = seqctrl.sequencecontrol()        # better to put this in __init__() to avoid creating multiple objects everytime this is called...
+        
         # if isinstance(sequenceArgs[-1], dict):
         #     PBchannels = sequenceArgs[-1]
         # else:
@@ -192,12 +189,12 @@ class PulseBlaster:
     @staticmethod
     def PB_program_camera(sequence, sequenceArgs, err_check=False):
         List = []
-        seqctrl_name, allPBchannels = sequencecontrol.sequencecontrol.make_sequence('cam', sequence, sequenceArgs)
+        seqctrl_name, allPBchannels = sequencecontrol.make_sequence('cam', sequence, sequenceArgs)
         # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
         # print(allPBchannels)
         for i in range(0, len(allPBchannels)):
             # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
-            channelBitMasks = sequencecontrol.sequencecontrol.sequence_event_cataloguer(allPBchannels[i])
+            channelBitMasks = sequencecontrol.event_cataloguer(allPBchannels[i])
             List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -205,12 +202,12 @@ class PulseBlaster:
     @staticmethod
     def PB_program_camera_trigger_many(sequence, sequenceArgs, err_check=False):
         List = []
-        seqctrl_name, allPBchannels = sequencecontrol.sequencecontrol.make_sequence('cam_levelm', sequence, sequenceArgs)
+        seqctrl_name, allPBchannels = sequencecontrol.make_sequence('cam_levelm', sequence, sequenceArgs)
         # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
         # print(allPBchannels)
         for i in range(0, len(allPBchannels)):
             # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
-            channelBitMasks = sequencecontrol.sequencecontrol.sequence_event_cataloguer(allPBchannels[i])
+            channelBitMasks = sequencecontrol.event_cataloguer(allPBchannels[i])
             List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -218,10 +215,10 @@ class PulseBlaster:
     @staticmethod
     def PB_program_camera_level_trigger_1(sequence, sequenceArgs, err_check=False):
         List = []
-        seqctrl_name, allPBchannels = sequencecontrol.sequencecontrol.make_sequence('cam_level1', sequence, sequenceArgs)
+        seqctrl_name, allPBchannels = sequencecontrol.make_sequence('cam_level1', sequence, sequenceArgs)
         # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
         # print(allPBchannels)
-        channelBitMasks = sequencecontrol.sequencecontrol.sequence_event_cataloguer(allPBchannels)
+        channelBitMasks = sequencecontrol.event_cataloguer(allPBchannels)
         List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -335,10 +332,13 @@ class PulseBlaster:
         -------
         None.
         """
-        # configure()
+        
         pb_reset()
         status = pb_start_programming(PULSE_PROGRAM);
         self.errorCatcher(status)
+        print(f"instructionList in run_sequence_for_diode:", end='\n')
+        print(instructionList)
+
         # there is only one element in 'instructionList'.. hence assigning this as instructionList instead of signal_instruction or reference_instruction..
         instructionList = instructionList[0]
         started = False

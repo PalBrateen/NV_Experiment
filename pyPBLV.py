@@ -13,10 +13,7 @@ Based on pyPBLV_qbuttongroup.py with improvements:
 @author: brate
 """
 
-import sys
-import os
-import logging
-import json
+import sys, os, logging, json, ctypes
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLineEdit,
@@ -25,8 +22,15 @@ from PySide6.QtWidgets import (
     QCheckBox, QStatusBar, QFrame, QSizePolicy, QGroupBox
 )
 from PySide6.QtCore import Qt, Slot, QTimer
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QPalette, QPainter, QFontMetrics
 from functools import reduce
+# from dark_mode_and_extended_error import DARK_STYLESHEET, StatusBarLongLabel
+
+# Get the absolute path to the directory containing the module
+expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')
+# Add the directory to sys.path
+sys.path.append(expt_dir)
+# Import the module as if it were in the current directory
 
 # Try to import spinapi, fall back to simulation mode if not available
 try:
@@ -43,6 +47,7 @@ CLOCK_FREQ = 500
 SPINAPI_DLL_PATH = r'C:\SpinCore\SpinAPI\lib\spinapi64.dll'
 WORKING_DIRECTORY = r'C:\NVExperiment\PBStates'  # Default working directory for state files
 CHANNEL_CONFIG_FILE = 'pb_channels.json'
+DEFAULT_STATE_FILE = 'last_state.json'
 MAX_CHANNELS = 21  # PulseBlaster has 21 channels (1-21)
 
 # Default channel names (commonly used)
@@ -53,25 +58,22 @@ DEFAULT_CHANNEL_NAMES = {
     8: "Camera",
 }
 
-# ============================================================================
-# Dark Theme Stylesheet
-# ============================================================================
 DARK_STYLESHEET = """
 QMainWindow, QWidget {
-    background-color: #1e1e1e;
-    color: #d4d4d4;
+    background-color: #242424;
+    color: #ffffff;
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 10pt;
 }
 
 QLabel {
-    color: #d4d4d4;
+    color: #ffffff;
     padding: 2px;
 }
 
 QLineEdit, QSpinBox, QComboBox {
-    background-color: #2d2d30;
-    color: #d4d4d4;
+    background-color: #484848;
+    color: #ffffff;
     border: 1px solid #3f3f46;
     border-radius: 3px;
     padding: 4px;
@@ -79,7 +81,7 @@ QLineEdit, QSpinBox, QComboBox {
 }
 
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
-    border: 1px solid #007acc;
+    border: 1px solid #009de0;
 }
 
 QLineEdit:disabled, QSpinBox:disabled {
@@ -88,16 +90,16 @@ QLineEdit:disabled, QSpinBox:disabled {
 }
 
 QPushButton {
-    background-color: #0e639c;
+    background-color: #009de0;
     color: white;
     border: none;
     border-radius: 4px;
-    padding: 8px 16px;
-    min-width: 80px;
+    padding: 2px 2px;
+    /*min-width: 40px;*/
 }
 
 QPushButton:hover {
-    background-color: #1177bb;
+    background-color: #02b0fa;
 }
 
 QPushButton:pressed {
@@ -112,10 +114,10 @@ QPushButton:disabled {
 /* Checkable channel buttons - unchecked state */
 QPushButton[checkable="true"] {
     background-color: #3c3c3c;
-    color: #d4d4d4;
+    color: #ffffff;
     border: 1px solid #555555;
     padding: 4px 8px;
-    min-width: 40px;
+    min-width: 30px;
 }
 
 /* Checkable channel buttons - checked (active) state - GREEN */
@@ -133,6 +135,53 @@ QPushButton[checkable="true"]:checked:hover {
     background-color: #388e3c;
 }
 
+/* The Main Box */
+QSpinBox {
+    background-color: #2d2d2d;
+    color: #ffffff;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    padding-right: 5px; /* Leave space for buttons */
+    selection-background-color: #444444;
+}
+
+/* The Buttons Container */
+QSpinBox::up-button, QSpinBox::down-button {
+    background-color: #3d3d3d;
+    border-left: 1px solid #555555;
+    width: 20px;
+}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background-color: #4d4d4d;
+}
+
+/* The Arrows (Triangle Hack) */
+QSpinBox::up-arrow {
+    width: 0px; height: 0px;
+    border-left: 4px solid #3d3d3d;
+    border-right: 4px solid #3d3d3d;
+    border-bottom: 5px solid #ffffff;
+}
+
+QSpinBox::down-arrow {
+    width: 0px; height: 0px;
+    border-left: 4px solid #3d3d3d;
+    border-right: 4px solid #3d3d3d;
+    border-top: 5px solid #ffffff;
+}
+
+/* Disabled State - Critical for Logic */
+QSpinBox:disabled {
+    background-color: #1e1e1e;
+    color: #777777;
+}
+
+QSpinBox::up-arrow:disabled, QSpinBox::down-arrow:disabled {
+    border-bottom-color: #555555;
+    border-top-color: #555555;
+}
+
 QComboBox {
     padding-right: 20px;
 }
@@ -143,22 +192,23 @@ QComboBox::drop-down {
 }
 
 QComboBox::down-arrow {
-    image: none;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 5px solid #d4d4d4;
+    width: 0px; height: 0px;
+    border-left: 4px solid #484848;
+    border-right: 4px solid #484848;
+    border-top: 5px solid #ffffff;
     margin-right: 5px;
 }
 
 QComboBox QAbstractItemView {
     background-color: #2d2d30;
-    color: #d4d4d4;
+    color: #ffffff;
     selection-background-color: #094771;
     border: 1px solid #3f3f46;
 }
 
 QScrollArea {
-    border: 1px solid #3f3f46;
+    border: 3px solid #3f3f46;
+    border-radius: 5px;
     background-color: #252526;
 }
 
@@ -205,11 +255,11 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
 }
 
 QGroupBox {
-    border: 1px solid #3f3f46;
-    border-radius: 4px;
+    border: 3px solid #3f3f46;
+    border-radius: 5px;
     margin-top: 8px;
     padding-top: 8px;
-    color: #d4d4d4;
+    color: #ffffff;
 }
 
 QGroupBox::title {
@@ -219,7 +269,7 @@ QGroupBox::title {
 }
 
 QCheckBox {
-    color: #d4d4d4;
+    color: #ffffff;
     spacing: 8px;
 }
 
@@ -233,13 +283,13 @@ QCheckBox::indicator {
 
 QCheckBox::indicator:checked {
     background-color: #0e639c;
-    border-color: #007acc;
+    border-color: #859199;
 }
 
 QStatusBar {
-    background-color: #007acc;
+    background-color: #303030;
     color: white;
-    border-top: 1px solid #005a9e;
+    border-top: 2px solid #878787;
 }
 
 QStatusBar QLabel {
@@ -252,6 +302,32 @@ QFrame#separator {
 }
 """
 
+class StatusBarLongLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Set a minimum width so it doesn't disappear, 
+        # but no maximum so it can take up available space.
+        self.setMinimumWidth(100)
+        self.setStyleSheet("color: #ff6b6b;") # Light red for dark mode errors
+
+    def paintEvent(self, event):
+        """Custom paint event to draw elided text."""
+        painter = QPainter(self)
+        metrics = QFontMetrics(self.font())
+        
+        # Calculate the elided text based on CURRENT label width
+        # Qt.ElideRight puts the '...' at the end.
+        elided_text = metrics.elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        
+        # Draw the text within the label's rectangle
+        painter.drawText(self.rect(), self.alignment(), elided_text)
+        painter.end()
+
+    def set_error(self, message):
+        """Update text and set the full message as a tooltip."""
+        self.setText(message)
+        self.setToolTip(message) # The OS handles the popup on hover
+
 # ============================================================================
 # Logging Setup
 # ============================================================================
@@ -262,7 +338,7 @@ logging.basicConfig(
 
 def setup_logging():
     logger = logging.getLogger('pyPBLV')
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     
     if logger.hasHandlers():
         logger.handlers.clear()
@@ -324,6 +400,7 @@ else:
 class SpinAPIGUI(QMainWindow):
     def __init__(self):
         super().__init__()
+        # self.setStyleSheet("QMainWindow { border: 50px solid #ffffff; }")
         self.spinapi_version = ''
         self.logger = logging.getLogger('pyPBLV')
         
@@ -343,10 +420,14 @@ class SpinAPIGUI(QMainWindow):
         self.channel_name_widgets = {}  # Store QLineEdit widgets for channel names
         self.d_struct = []
         
+        self.window_width: int = 500
+        self.window_height: int = 700
         # Program state
         self.prg_order = 0
-        
+
+        # self.status_bar.setStyleSheet("QStatusBar{background-color: yellow; color: black;}")
         self.initUI()
+        self.load_state()
 
     def load_channel_names(self):
         """Load channel names from config file in working directory."""
@@ -379,11 +460,12 @@ class SpinAPIGUI(QMainWindow):
 
     def initUI(self):
         self.setWindowTitle('SpinAPI Controller')
-        self.setGeometry(100, 100, 900, 700)
+        self.setGeometry(100, 100, self.window_width, self.window_height)
         self.setStyleSheet(DARK_STYLESHEET)
         
         # Create central widget and main layout
         central_widget = QWidget()
+        # QWidget combining
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         main_layout.setSpacing(10)
@@ -403,13 +485,14 @@ class SpinAPIGUI(QMainWindow):
         # Separator
         separator = QFrame()
         separator.setObjectName("separator")
-        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShape(QFrame.Shape.HLine)
         separator.setFixedHeight(2)
         main_layout.addWidget(separator)
         
         # Instruction grid with scroll area
         self._create_instruction_grid(main_layout)
         
+        # QWidget combining
         # Status bar
         self._create_status_bar()
         
@@ -427,27 +510,30 @@ class SpinAPIGUI(QMainWindow):
         button_layout = QVBoxLayout(button_group)
         
         # Row 1: Load and Start/Restart
-        row1 = QHBoxLayout()
-        self.load_board_btn = QPushButton('LOAD BOARD')
-        self.load_board_btn.setFixedSize(130, 45)
+        # row1 = QHBoxLayout()
+        self.load_board_btn = QPushButton('🔁')     # LOAD
+        self.load_board_btn.setFixedSize(100, 30)
+        self.load_board_btn.setStyleSheet("QPushButton { font-size: 20px; }")
         self.load_board_btn.clicked.connect(self.load_pushbutton_Callback)
-        row1.addWidget(self.load_board_btn)
+        button_layout.addWidget(self.load_board_btn)
         
-        self.start_restart_btn = QPushButton('START/RESTART')
-        self.start_restart_btn.setFixedSize(130, 45)
+        self.start_restart_btn = QPushButton('▶')   # START
+        self.start_restart_btn.setFixedSize(100, 30)
+        self.start_restart_btn.setStyleSheet("QPushButton { font-size: 30px; }")
         self.start_restart_btn.clicked.connect(self.start_pushbutton_Callback)
-        row1.addWidget(self.start_restart_btn)
-        button_layout.addLayout(row1)
+        button_layout.addWidget(self.start_restart_btn)
+        # button_layout.addLayout(row1)
         
         # Row 2: Change Board and Stop
-        row2 = QHBoxLayout()
-        self.change_board_btn = QPushButton('CHANGE BOARD')
-        self.change_board_btn.setFixedSize(130, 45)
-        self.change_board_btn.clicked.connect(self.change_board)
-        row2.addWidget(self.change_board_btn)
-        
-        self.stop_btn = QPushButton('STOP')
-        self.stop_btn.setFixedSize(130, 45)
+        # row2 = QHBoxLayout()
+        # self.change_board_btn = QPushButton('CHANGE BOARD')
+        # self.change_board_btn.setFixedSize(100, 30)
+        # self.change_board_btn.clicked.connect(self.change_board)
+        # row2.addWidget(self.change_board_btn)
+        # |🔄🔃🔀
+        self.stop_btn = QPushButton('🛑') # STOP
+        self.stop_btn.setFixedSize(100, 30)
+        self.stop_btn.setStyleSheet("QPushButton { font-size: 30px; }")
         self.stop_btn.setStyleSheet("""
             QPushButton {
                 background-color: #c62828;
@@ -460,8 +546,8 @@ class SpinAPIGUI(QMainWindow):
             }
         """)
         self.stop_btn.clicked.connect(self.stop_pushbutton_Callback)
-        row2.addWidget(self.stop_btn)
-        button_layout.addLayout(row2)
+        button_layout.addWidget(self.stop_btn)
+        # button_layout.addLayout(row2)
         
         parent_layout.addWidget(button_group)
 
@@ -480,33 +566,62 @@ class SpinAPIGUI(QMainWindow):
         self.state_combo = QComboBox()
         self.state_combo.setEditable(True)  # Allow typing new names
         self.state_combo.setMinimumWidth(180)
-        self.state_combo.setInsertPolicy(QComboBox.NoInsert)  # Don't auto-add typed text
+        self.state_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)  # Don't auto-add typed text
         self.state_combo.lineEdit().setPlaceholderText("Enter name or select...")
         self.refresh_state_files()
         filename_row.addWidget(self.state_combo)
-        
-        # Refresh button inline with combo
-        self.refresh_btn = QPushButton('↻')
-        self.refresh_btn.setFixedSize(28, 28)
-        self.refresh_btn.setToolTip("Refresh file list")
-        self.refresh_btn.clicked.connect(self.refresh_state_files)
-        filename_row.addWidget(self.refresh_btn)
         
         state_layout.addLayout(filename_row)
         
         # Load and Save buttons row
         btn_row = QHBoxLayout()
-        btn_row.addStretch()
+        btn_row.addStretch(20)
         
         self.load_state_btn = QPushButton('Load')
-        self.load_state_btn.setFixedWidth(80)
+        self.load_state_btn.setStyleSheet("""
+            QPushButton {
+            background-color: #484848;
+            color: #ffffff;
+            }
+            QPushButton:hover {
+                background-color: #009de0;
+            }
+        """)
+        self.load_state_btn.setFixedSize(60, 25)
         self.load_state_btn.clicked.connect(self.load_state)
         btn_row.addWidget(self.load_state_btn)
-        
+
         self.save_state_btn = QPushButton('Save')
-        self.save_state_btn.setFixedWidth(80)
+        self.save_state_btn.setStyleSheet("""
+            QPushButton {
+            background-color: #d3dbde;
+            color: #484848;
+            }
+            QPushButton:hover {
+                background-color: #009de0;
+                color: #ffffff;
+            }
+        """)
+        self.save_state_btn.setFixedSize(60, 25)
         self.save_state_btn.clicked.connect(self.save_state)
         btn_row.addWidget(self.save_state_btn)
+
+        # Refresh button inline with combo
+        self.refresh_btn = QPushButton('↻')
+        self.refresh_btn.setStyleSheet("""
+            QPushButton {
+            background-color: #484848;
+            color: #ffffff;
+            }
+            QPushButton:hover {
+                background-color: #009de0;
+                color: #ffffff;
+            }
+        """)
+        self.refresh_btn.setFixedSize(25, 25)
+        self.refresh_btn.setToolTip("Refresh file list")
+        self.refresh_btn.clicked.connect(self.refresh_state_files)
+        btn_row.addWidget(self.refresh_btn)
         
         state_layout.addLayout(btn_row)
         settings_layout.addLayout(state_layout)
@@ -518,6 +633,7 @@ class SpinAPIGUI(QMainWindow):
         inst_col = QVBoxLayout()
         inst_col.addWidget(QLabel("# Instructions:"))
         self.num_instructions = QSpinBox()
+        self.num_instructions.setFixedSize(70, 25)
         self.num_instructions.setRange(1, 50)
         self.num_instructions.setValue(6)
         self.num_instructions.valueChanged.connect(self.update_grid)
@@ -528,12 +644,14 @@ class SpinAPIGUI(QMainWindow):
         chan_col = QVBoxLayout()
         chan_col.addWidget(QLabel("# Channels:"))
         self.num_channels_spin = QSpinBox()
-        self.num_channels_spin.setRange(1, MAX_CHANNELS)
+        self.num_channels_spin.setFixedSize(70, 25)
+        self.num_channels_spin.setRange(0, MAX_CHANNELS-1)
         self.num_channels_spin.setValue(8)
         self.num_channels_spin.valueChanged.connect(self.on_channels_changed)
         chan_col.addWidget(self.num_channels_spin)
         grid_settings.addLayout(chan_col)
-        
+
+        grid_settings.addStretch()
         settings_layout.addLayout(grid_settings)
         
         # Filter checkbox
@@ -551,7 +669,7 @@ class SpinAPIGUI(QMainWindow):
         """Create the scrollable instruction grid."""
         self.grid_layout = QGridLayout()
         self.grid_layout.setSpacing(4)
-        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # Align to top-left
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)  # Align to top-left
         
         self.grid_widget = QWidget()
         self.grid_widget.setLayout(self.grid_layout)
@@ -560,7 +678,7 @@ class SpinAPIGUI(QMainWindow):
         scroll_content = QWidget()
         scroll_content_layout = QVBoxLayout(scroll_content)
         scroll_content_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_content_layout.addWidget(self.grid_widget)
+        scroll_content_layout.addWidget(self.grid_widget, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         scroll_content_layout.addStretch(1)  # Push content to top
         
         scroll_area = QScrollArea()
@@ -576,39 +694,42 @@ class SpinAPIGUI(QMainWindow):
         self.setStatusBar(self.status_bar)
         
         # DLL path label
-        self.dll_label = QLabel(f"DLL: {SPINAPI_DLL_PATH}")
+        self.dll_label = StatusBarLongLabel()
         self.dll_label.setStyleSheet("color: #aaaaaa;")
-        self.status_bar.addWidget(self.dll_label)
+        self.status_bar.addWidget(self.dll_label,1)
+        self.dll_label.set_error(f"DLL: {SPINAPI_DLL_PATH}")
         
-        # Separator
-        sep = QLabel("|")
-        sep.setStyleSheet("color: #666666;")
-        self.status_bar.addWidget(sep)
+        # # Separator
+        # sep = QLabel("|")
+        # sep.setStyleSheet("color: #666666;")
+        # self.status_bar.addWidget(sep)
         
         # Clock frequency label
         self.clock_label = QLabel(f"Clock: {CLOCK_FREQ} MHz")
         self.status_bar.addWidget(self.clock_label)
         
-        # Separator
-        sep2 = QLabel("|")
-        sep2.setStyleSheet("color: #666666;")
-        self.status_bar.addWidget(sep2)
+        # # Separator
+        # sep2 = QLabel("|")
+        # sep2.setStyleSheet("color: #666666;")
+        # self.status_bar.addWidget(sep2)
         
         # Board number label
         self.board_label = QLabel("Board: 0")
         self.status_bar.addWidget(self.board_label)
         
-        # Stretch to push status to right
-        self.status_bar.addWidget(QWidget(), 1)
+        # # Stretch to push status to right
+        # self.status_bar.addWidget(QWidget(), 1)
         
         # Status message (right side)
-        self.status_message = QLabel("OK")
+        self.status_message = StatusBarLongLabel() #QLabel("OK")
         self.status_message.setStyleSheet("color: #4caf50; font-weight: bold;")
-        self.status_bar.addPermanentWidget(self.status_message)
+        self.status_message.setStyleSheet("padding-right: 20px;")
+        # self.status_bar.addPermanentWidget(self.status_message)
+        self.status_bar.addWidget(self.status_message, 1)
 
     def set_status(self, message, is_error=False):
         """Set status bar message with appropriate color."""
-        self.status_message.setText(message)
+        self.status_message.set_error(message)
         if is_error:
             self.status_message.setStyleSheet("color: #f44336; font-weight: bold;")
         else:
@@ -622,8 +743,10 @@ class SpinAPIGUI(QMainWindow):
         self.state_combo.clear()
         
         try:
+            self.state_combo.addItem(Path(DEFAULT_STATE_FILE).stem, DEFAULT_STATE_FILE)
             if self.working_directory.exists():
                 json_files = sorted(self.working_directory.glob("*.json"))
+                json_files.remove(self.working_directory / DEFAULT_STATE_FILE)
                 for f in json_files:
                     if f.name != CHANNEL_CONFIG_FILE:
                         self.state_combo.addItem(f.stem, str(f))
@@ -644,7 +767,7 @@ class SpinAPIGUI(QMainWindow):
     def _safe_update_grid(self):
         """Wrapper for update_grid with exception handling."""
         try:
-            self._do_update_grid()
+            self.update_grid()
         except Exception as e:
             self.logger.error(f"Grid update error: {e}")
 
@@ -652,10 +775,10 @@ class SpinAPIGUI(QMainWindow):
         """Get list of channel indices to display based on filter settings."""
         if self.filter_named_checkbox.isChecked():
             # Return only channels that have names
-            named = [ch for ch in range(1, MAX_CHANNELS + 1) if ch in self.channel_names and self.channel_names[ch].strip()]
-            return named if named else list(range(1, self.n_channels + 1))
+            named = [ch for ch in range(0, MAX_CHANNELS) if ch in self.channel_names and self.channel_names[ch].strip()]
+            return named if named else list(range(0, self.n_channels + 1))
         else:
-            return list(range(1, self.n_channels + 1))
+            return list(range(0, self.n_channels + 1))
 
     @Slot()
     def update_grid(self):
@@ -728,7 +851,7 @@ class SpinAPIGUI(QMainWindow):
             
             for col in range(num_cols):
                 header = QLabel(f"Inst {col + 1}")
-                header.setAlignment(Qt.AlignCenter)
+                header.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 header.setStyleSheet("font-weight: bold;")
                 self.grid_layout.addWidget(header, 0, get_grid_col(col))
             
@@ -829,7 +952,7 @@ class SpinAPIGUI(QMainWindow):
             # Separator after channel names column (column 1)
             for row in range(total_rows):
                 sep = QFrame()
-                sep.setFrameShape(QFrame.VLine)
+                sep.setFrameShape(QFrame.Shape.VLine)
                 sep.setStyleSheet("background-color: #3f3f46;")
                 sep.setFixedWidth(2)
                 self.grid_layout.addWidget(sep, row, 1)
@@ -839,7 +962,7 @@ class SpinAPIGUI(QMainWindow):
                 sep_col = get_grid_col(col) + 1  # Separator column after each instruction
                 for row in range(total_rows):
                     sep = QFrame()
-                    sep.setFrameShape(QFrame.VLine)
+                    sep.setFrameShape(QFrame.Shape.VLine)
                     sep.setStyleSheet("background-color: #3f3f46;")
                     sep.setFixedWidth(2)
                     self.grid_layout.addWidget(sep, row, sep_col)
@@ -925,20 +1048,19 @@ class SpinAPIGUI(QMainWindow):
         """Save current state to a JSON file."""
         try:
             # Get filename from combo (typed or selected)
-            filename = self.state_combo.currentText().strip()
+            filename = Path(self.state_combo.currentText().strip())# if filename is None else Path(filename)
             
             if not filename:
                 # Create default filename if empty
                 from datetime import datetime
-                filename = f"pb_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                filename = Path(f"pb_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             
             # Remove .json extension if user typed it
-            if filename.lower().endswith('.json'):
-                filename = filename[:-5]
-            
-            filepath = self.working_directory / f"{filename}.json"
+            filepath = self.working_directory / filename.with_suffix('.json')
             
             state_data = {
+                'window_width': self.width(),
+                'window_height': self.height(),
                 'num_instructions': self.num_instructions.value(),
                 'num_channels': self.num_channels_spin.value(),
                 'clock_freq': CLOCK_FREQ,
@@ -961,7 +1083,7 @@ class SpinAPIGUI(QMainWindow):
             self.refresh_state_files()
             
             # Select the saved file in dropdown
-            idx = self.state_combo.findText(filename)
+            idx = self.state_combo.findText(filename.stem)
             if idx >= 0:
                 self.state_combo.setCurrentIndex(idx)
             
@@ -972,24 +1094,21 @@ class SpinAPIGUI(QMainWindow):
     def load_state(self):
         """Load state from selected or typed JSON file."""
         try:
-            filename = self.state_combo.currentText().strip()
+            filename = Path(self.state_combo.currentText().strip())# if filename is None else Path(filename)
             
             if not filename:
                 self.set_status("No file specified", is_error=True)
                 return
             
-            # Remove .json extension if user typed it
-            if filename.lower().endswith('.json'):
-                filename = filename[:-5]
-            
-            # Try to get filepath from combo data first (for selected items)
-            filepath = self.state_combo.currentData()
+            # # Try to get filepath from combo data first (for selected items)
+            # filepath = Path(self.state_combo.currentData())
             
             # If no data (user typed), construct path
-            if not filepath:
-                filepath = self.working_directory / f"{filename}.json"
-            else:
-                filepath = Path(filepath)
+            # if not filepath:
+            print(f"filename: {filename}")
+            filepath = self.working_directory / filename.with_suffix(".json")
+            # else:
+            #     filepath = Path(filepath)
             
             if not filepath.exists():
                 self.set_status(f"File not found: {filename}", is_error=True)
@@ -998,6 +1117,11 @@ class SpinAPIGUI(QMainWindow):
             with open(filepath, 'r') as f:
                 state_data = json.load(f)
             
+            # Set window
+            self.window_width = state_data.get('window_width',500)
+            self.window_height = state_data.get('window_height',700)
+            self.resize(self.window_width, self.window_height)
+
             # Set settings
             self.num_instructions.setValue(state_data.get('num_instructions', 6))
             self.num_channels_spin.setValue(state_data.get('num_channels', 8))
@@ -1028,7 +1152,7 @@ class SpinAPIGUI(QMainWindow):
         self.d_struct = []
         
         def calc_flag_val(flag_list):
-            return sum(2**bit for bit in flag_list) if flag_list else 0
+            return sum(2**(bit+1) for bit in flag_list) if flag_list else 0
         
         for col, data in self.column_data.items():
             d = {'inst_num': col}
@@ -1045,11 +1169,12 @@ class SpinAPIGUI(QMainWindow):
             d['dur'] = time_val
             d['s_mult'] = time_unit
             d['d_mult'] = d_mult.get(time_unit, s)
+            # print(f"Buttons = {list(data['buttons'])}")
             d['flags'] = calc_flag_val(list(data['buttons']))
             
             try:
                 if SPINAPI_AVAILABLE:
-                    d['inst'] = Inst[data['opcode']].value
+                    d['inst'] = Inst[data['opcode']]#.value
                 else:
                     d['inst'] = getattr(Inst, data['opcode'])
             except:
@@ -1070,7 +1195,7 @@ class SpinAPIGUI(QMainWindow):
                 self.set_status(f"Board error: {pb_get_error()}", is_error=True)
                 self.prg_order = -1
             elif count == 0:
-                self.set_status("No board detected", is_error=True)
+                self.set_status("NO board", is_error=True)
                 self.prg_order = -1
             else:
                 pb_close()
@@ -1080,7 +1205,7 @@ class SpinAPIGUI(QMainWindow):
                 pb_init()
                 self.prg_order = 0
                 self.spinapi_version = pb_get_version()
-                self.set_status(f"Board ready (v{self.spinapi_version})")
+                self.set_status(f"v{self.spinapi_version} Ready")
                 self.board_label.setText(f"Board: 0")
                 pb_close()
                 
@@ -1089,14 +1214,14 @@ class SpinAPIGUI(QMainWindow):
             self.set_status(f"Init error: {str(e)}", is_error=True)
             self.prg_order = -1
 
-    def clock_freq_callback(self):
-        """Handle clock frequency change."""
-        global CLOCK_FREQ
-        try:
-            CLOCK_FREQ = int(self.clock_freq.text())
-            self.clock_label.setText(f"Clock: {CLOCK_FREQ} MHz")
-        except:
-            pass
+    # def clock_freq_callback(self):
+    #     """Handle clock frequency change."""
+    #     global CLOCK_FREQ
+    #     try:
+    #         CLOCK_FREQ = int(self.clock_freq.text())
+    #         self.clock_label.setText(f"Clock: {CLOCK_FREQ} MHz")
+    #     except:
+    #         pass
 
     def change_board(self):
         """Handle change board button."""
@@ -1114,9 +1239,9 @@ class SpinAPIGUI(QMainWindow):
                 self.prg_order = 2
                 self.set_status("Running")
         elif self.prg_order == 2:
-            self.set_status("Board is already running", is_error=True)
+            self.set_status("Running already", is_error=True)
         elif self.prg_order < 0:
-            self.set_status("No board detected!", is_error=True)
+            self.set_status("NO board!", is_error=True)
         pb_close()
 
     def stop_pushbutton_Callback(self):
@@ -1125,7 +1250,7 @@ class SpinAPIGUI(QMainWindow):
         if self.prg_order == 0:
             self.set_status("Must Load Board First", is_error=True)
         elif self.prg_order == 1:
-            self.set_status("Board is already stopped")
+            self.set_status("Stopped already")
         elif self.prg_order == 2:
             if pb_stop() < 0:
                 self.set_status(f"Stop failed: {pb_get_error()}", is_error=True)
@@ -1133,7 +1258,7 @@ class SpinAPIGUI(QMainWindow):
                 self.prg_order = 1
                 self.set_status("Stopped")
         elif self.prg_order < 0:
-            self.set_status("No board detected!", is_error=True)
+            self.set_status("NO board!", is_error=True)
         pb_close()
 
     def load_pushbutton_Callback(self):
@@ -1149,12 +1274,16 @@ class SpinAPIGUI(QMainWindow):
                 pb_core_clock(CLOCK_FREQ)
                 pb_start_programming(PULSE_PROGRAM)
                 
+                # print(self.d_struct)
                 for s_inst in self.d_struct:
                     self.logger.debug(f"Programming: flags={s_inst['flags']}, inst={s_inst['inst']}, "
                                      f"data={s_inst['instruct_data']}, dur={s_inst['dur'] * s_inst['d_mult']}")
                     pb_inst_pbonly(s_inst['flags'], s_inst['inst'], 
                                   s_inst['instruct_data'], s_inst['dur'] * s_inst['d_mult'])
+                    # print(s_inst['flags'], s_inst['inst'], s_inst['instruct_data'], s_inst['dur'], s_inst['d_mult'])
+                    # print(type(s_inst['flags']), type(s_inst['inst']), type(s_inst['instruct_data']), type(s_inst['dur']), type(s_inst['d_mult']))
                     err = pb_get_error()
+                    # print(f"error = {err}")
                     if err and 'ok' not in err.lower():
                         self.logger.warning(f'Instruction warning: {err}')
                 
@@ -1164,36 +1293,46 @@ class SpinAPIGUI(QMainWindow):
                 pb_close()
                 
             except Exception as e:
+                # print(e)
                 self.logger.error(f'Load error: {e}')
                 self.set_status(f"Load failed: {str(e)}", is_error=True)
                 pb_close()
         else:
-            self.set_status("No board detected!", is_error=True)
+            self.set_status("NO board!", is_error=True)
 
     def closeEvent(self, event):
         """Handle window close - save channel names and cleanup."""
         # Save channel names before closing
         self.save_channel_names()
         
-        # Stop board if running
-        if self.prg_order == 2:
-            self.stop_pushbutton_Callback()
+        # # Stop board if running
+        # if self.prg_order == 2:
+        #     self.stop_pushbutton_Callback()
         
+        # Save last state before exiting
+        self.save_state()
+
         event.accept()
         QApplication.quit()
-
 
 # ============================================================================
 # Main Entry Point
 # ============================================================================
 if __name__ == '__main__':
+    
+    # Must be called before creating QApplication
+    myappid = 'bplab.scopeviewer.v2'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
     setup_logging()
     app = QApplication(sys.argv)
-    
+        
     # Set application-wide palette for dark theme
     app.setStyle('Fusion')
+    # app.setStyleSheet('QMainWindow{background-color: white;border: 10px solid white;}')
     
     gui = SpinAPIGUI()
     gui.show()
     
     sys.exit(app.exec())
+
