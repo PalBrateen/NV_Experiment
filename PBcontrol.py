@@ -15,6 +15,7 @@ class PulseBlaster:
         # self.clk_cyc = (1 / self.pbclk) * 1e3  # in ns
         self.clk_cyc = self.parameter_dict['pb']['clk_cyc']
         self.pb_status = "closed"
+        self.seqctrl = seqctrl.sequencecontrol()        # better to put this in __init__() to avoid creating multiple objects evreytime this is called...
         # self.configure()
 
         # the state of the PulseBlaster is as follows, state can be enquired after initialization

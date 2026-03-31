@@ -59,7 +59,6 @@ min_focus_time = 5      # [s]
 # cam_syncm_trigger_ao_dc
 
 t_exposure /= 1e3       # [s]
-
 if prop_phi == 0:
     align_field[1] = 0
 elif prop_phi == 90:
@@ -1302,6 +1301,203 @@ if __name__ == '__main__':
 
                     # if expCfg.Nruns>1:
                     #     paramfilename = savePath+"params_"+str(f_number)+".txt"
+
+                    save_parameters(paramfilename, param_save_format, expParamList)
+
+                    [next_params_format, expParamList] = extra_param_save_details(scan_time_list,\
+                                                                                  run_time, roi, t_exposure)
+                    save_parameters(paramfilename, next_params_format, expParamList)
+                # plt.close('all')
+
+                # sys.exit(exit_code)       # the exit code is the one returned from the pyqt app
+                # scan_time_list in seconds; exec_time in seconds
+        elif trial_run[1] == 'y':
+            # TODO: #6 the laser is not ON during trial run --  why is that??
+            try:
+                run_start_time = time.perf_counter()    # entire measurement time
+                print(f"Actual exposure time = {camera_worker.exposure*1e3:0.2f} ms")
+                PB_wait_time = []
+                
+                if 'trigger_ao' in instr:
+                    print(f"Set t_align_DC = {t_align_dc} ms")
+                    # t_align_dc is in ms
+                    if t_align_dc < 50:
+                        instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW ^ concfg.start_trig, Inst.CONTINUE, 0, t_align_dc*ms/2],
+                                        [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, t_align_dc*ms/2]]
+                    else:
+                        duty = 0.07
+                        x = np.ceil(duty*t_align_dc/(1-duty)/10)*10       # in ms
+                        instructionList = [[concfg.laser ^ concfg.bz ^ concfg.MW, Inst.CONTINUE, 0, x],
+                                            [concfg.laser ^ concfg.bz, Inst.CONTINUE, 0, (t_align_dc*ms/2-x)],
+                                            [concfg.laser ^ concfg.bx ^ concfg.by, Inst.BRANCH, 0, (t_align_dc*ms/2)]]
+                        
+                    pb.run_sequence_for_diode([instructionList])
+
+                print("\x10 Camera configured for %d frames..." % expCfg.Nsamples)    # expCfg.Nsamples=1 (default) - ekta scanpt e ekta e frame
+                print('\x10 %d frames in each cycles...' % frames_per_cyc[0])       # hence, total # frames = frames_per_cyc[0]*expCfg.Nsamples = Nsamples
+                hsize = roi[2]; vsize = roi[3]
+                print("------Acquiring %dx%d------" % (hsize, vsize))
+
+                data = np.zeros((expCfg.Nruns, Nscanpts, Nsamples, vsize, hsize), dtype='uint16')
+
+                # main loop
+                for i_run in range(0, expCfg.Nruns):     # TODO: add Nruns loop as well
+                    print("\x1b[38;2;255;150;10mRun: ", i_run + 1, ' / ', expCfg.Nruns, "\x1b[0m")
+                    if (i_run+1)%5 == 0:
+                        print("Adjusting focus...")
+                        camera_worker.query_cam_settings()
+                        if instr == 'cam_levelm' or instr == 'cam_syncm':
+                            pb.focus_adjustment_sequence(instr, t_exposure=t_exposure*1e9, Nsamples=Nsamples, \
+                                                         focus_time=min_focus_time*1e9)
+                            
+                        elif 'levelm_trigger' in instr:
+                            pb.focus_adjustment_sequence(instr, t_exposure=t_exposure*1e9, Nsamples=Nsamples, \
+                                                         focus_time=min_focus_time*1e9, t_align=t_align_rot*1e9)
+                            
+                        else:
+                            pb.focus_adjustment_sequence(instr, t_exposure=t_exposure*1e9, Nsamples=Nsamples, \
+                                                         focus_time=min_focus_time*1e9, t_align=t_align_rot*1e9,)
+                        
+                        print(f"{pb.min_focus_time/s} [s], {pb.n_repeat}")
+                        pb.start_sequence()
+
+                        # camera_worker.start_capture(run_only=True)
+                        time_start = time.perf_counter()
+                        # while camera_worker.camera_status == dcamcon.DCAMCAP_STATUS.BUSY:
+                        camera_worker.cv_window_status = 0
+                        while (time.perf_counter()-time_start) < pb.min_focus_time/s:
+                            timeout_happened = 0
+                            
+                            res = True #camera_worker.hdcamcon.wait_capevent_frameready(2000)
+                            
+                            # wait_capevent_frameready() succeeded
+                            camera_worker.last_frame = (np.random.rand(*camera_worker.roi[-2:]) \
+                                                        *(2**16)).astype(np.uint16).transpose()
+                            # print('frame elo...')
+                            if camera_worker.last_frame is not False:
+                                if not camera_worker.display_frame(camera_worker.device_title, camera_worker.last_frame):
+                                    # if q | Q is pressed on the cv2 window
+                                    # self.stop()
+                                    cv2.destroyWindow(camera_worker.device_title)
+                                    # self.query_camera_status()       # expecting BUSY
+                                    # next is done to indicate the class that the capture has stopped
+                                    camera_worker.camera_status = dcamcon.DCAMCAP_STATUS.READY
+                                    
+                                    print(f"Live View stopped...")
+                                    break
+                        cv2.destroyWindow(camera_worker.device_title)
+                        
+                        pb.stop_sequence()
+
+                        # camera settings
+                        # camera_worker.configure_camera(instr)
+                        # camera_worker.query_cam_settings()
+                        print("Focus adjusted...")
+                    
+                    print('Starting threads...')
+                    trigger_event = threading.Event()       # Event object to signal between threads
+                    condition = threading.Condition()
+                    
+                    kw_args = {'t_seq_total': t_seq_total, 'parameters': param, 'sequence': expCfg.sequence,\
+                               'seqArgList': seqArgList, 'trigger_event': trigger_event, 'condition': condition}
+                    # Create and start the scan thread: t_seq_total, parameters, sequence, seqArgList, trigger_event, condition
+                    acq_start_time = time.perf_counter()
+
+                    if instr == 'cam_timeseries_trigger_ao':
+                        scan_thread = PBThread(t_exposure *1e9, N_total, t_align_rot *1e9, t_meas *1e6,\
+                                               t_align_rot_extended *1e9, **kw_args)
+                    
+                    # elif instr == 'cam_syncm_trigger_ao' or instr == 'cam_levelm_trigger_ao':   # changed to below for generalization
+                    elif 'syncm_trigger' in instr or 'levelm_trigger' in instr:
+                        scan_thread = PBThread(t_exposure *1e9, N_total, t_align_rot *1e9, **kw_args)
+                    
+                    else:
+                        scan_thread = PBThread(t_exposure *1e9, N_total, t_align_dc *1e6, **kw_args)
+                    
+                    if 'trigger_ao' in instr:
+                        ao_task.create_retriggerable_ao_task(v_rot_pattern.shape)
+                        print("Starting alignment pattern!")
+                        ao_task.start_retriggerable_ao_task(v_rot_pattern)
+                        # time.sleep(0.04)
+
+                    scan_thread.start()
+                    
+                    # Main thread handling camera acquisition
+                    # acq_start_time = time.perf_counter()
+                    [data, scan_time_list, i_scanpt_cam] = acquire_data_sim(trigger_event, condition, roi,\
+                                                                            Nsamples, Nscanpts, i_run)
+                    
+                    # acq_time = time.perf_counter() - acq_start_time
+
+                    # Wait for the pulse generation thread to complete
+                    scan_thread.join()
+
+                    acq_time = time.perf_counter() - acq_start_time
+
+                    i_scanpt = Nscanpts
+                    
+                # all runs complete.. process for display...
+
+                run_end_time = time.perf_counter()
+                run_time = run_end_time - run_start_time  # entire measurement time
+                print(f"Run time = {run_time:0.2f} s")
+                plot_raw_data(data=data)
+                plt.figure(num=time.strftime(" [%H:%M:%S]", time.localtime()))
+                for i_run in range(0, expCfg.Nruns):
+                    processed_data = process_data(i_scanpt, roi, Nsamples, data[i_run,:,:,:,:])  # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
+                    plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel,
+                              expCfg.plotXaxisUnits, roi, Nsamples, live=False)
+                # camera_worker.query_cam_settings()
+
+                # Close all after full acquisition
+                closed = close_all(sg, hdcamcon, ao_task)
+
+                savefile_yn = dialog.yesno_box('Data Saving', "Save data to file?")
+                if savefile_yn == 'yes':
+                    # Data file saving
+                    if expCfg.Nruns == 1:
+                        if save_flag == False:  # Ask for file number iff no save was performed
+                            [paramfilename, datafilename, f_number] = prepare_for_saving(savePath)
+                        save_flag = save_data(datafilename, data[0,:,:,:,:], f_number)
+                    else:
+                        for i_run in range(0, expCfg.Nruns):
+                            datafilename = savePath + expCfg.saveFileName + "_camera_" + str(i_run) + ".tiff"
+                            save_flag = save_data(datafilename, data[i_run,:,:,:,:], i_run)
+
+                else:
+                    print("\x10 \x1b[38;2;250;50;10mData NOT saved !!!\x1b[0m")
+
+            except KeyboardInterrupt:
+                # focus_thread.join()
+                run_end_time = time.perf_counter()
+                run_time = run_end_time - run_start_time  # entire measurement time
+                print('\x1b[38;2;250;100;0mUser Interrupted. Quitting...\x1b[0m')
+                # Plot the last run data upto the point where it was interrupted...
+                processed_data = process_data(i_scanpt, roi, Nsamples, data[0,:,:,:,:])  # ekhane i_scanpt newa hochhe.. (i_scanpt+1) noi.. expt majhe stop korle last scan pt ta baad dewa hochhe...
+                plot_data(i_scanpt, param, processed_data, expCfg.xAxisLabel,\
+                          expCfg.plotXaxisUnits, roi, Nsamples, live=False)
+                # Then ask whether to save it...
+                savefile_yn = dialog.yesno_box('Data Saving', "Save data to file?")
+                if savefile_yn == 'yes':
+                    # Ask for filename only if there was no save operation
+                    if save_flag == False:
+                        [paramfilename, datafilename, f_number] = prepare_for_saving(savePath)
+                    save_flag = save_data(datafilename, data[0,:,:,:,:], f_number)
+            finally:
+                # focus_thread.join()
+                if not closed:
+                    closed = close_all(sg, hdcamcon, ao_task)
+
+                print("\x10 Read \x1b[38;2;250;150;50m%d*%d\x1b[0m frames at each pt." % (frames_per_cyc[0], expCfg.Nsamples))
+
+                print("data = \x1b[38;2;250;150;50m%d x %d x %d x %d x%d\x1b[0m" % data.shape)
+                # Save parameters (only if there was one save operation)...
+                if save_flag:
+                    expParamList[1] = i_scanpt + 1  # expParamList[1] -> value of N_scanPts
+                    expParamList[3] = i_run + 1  # expParamList[3] -> value of Nruns
+
+                    if expCfg.Nruns>1:
+                        paramfilename = savePath+"params_"+str(f_number)+".txt"
 
                     save_parameters(paramfilename, param_save_format, expParamList)
 

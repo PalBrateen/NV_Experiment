@@ -14,8 +14,8 @@ PB_MW = 2
 PB_AOM = 3
 PB_start_trig = 4   # Start Trig -- PFI 15
 PB_camera = 0
+PB_I = 5
 PB_Q = 6
-PB_I = 7
 
 PB_bx = 5
 PB_by = 6
