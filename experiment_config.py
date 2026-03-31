@@ -315,6 +315,45 @@ class DAQAOConfig:
 
 
 @dataclass
+class DAQCIConfig:
+    """NI-DAQ counter input configuration.
+
+    Counters read photon counts from a single-photon detector (SPD).
+    The counter accumulates edges; read_daq() returns np.diff (counts per bin).
+
+    Fields
+    ------
+    ci_counter : str
+        Physical counter channel, e.g. 'P6363/ctr0'.
+    ci_input_terminal : str
+        PFI terminal where SPD pulses arrive, e.g. '/P6363/PFI2'.
+    ci_sample_source : str
+        External sample clock source (PB), e.g. 'PFI14'.  '' = internal.
+    ci_sample_rate : float
+        Nominal rate passed to cfg_samp_clk_timing (Hz).
+    ci_sample_mode : str
+        'finite' for sweep, 'continuous' for timeseries.
+        (Typically set by the experiment class, not the user.)
+    ci_samps_per_chan : int
+        Buffer / read size per acquisition.
+    ci_start_trigger_source : str
+        Arm-start trigger from PB, e.g. 'PFI15'.  '' = no trigger.
+    ci_start_trigger_edge : str
+        Edge type for the arm-start trigger.
+    """
+    ci_counter: str = 'P6363/ctr0'
+    ci_input_terminal: str = '/P6363/PFI2'
+
+    ci_sample_source: str = ''          # '' = internal clock
+    ci_sample_rate: float = 10e3        # Sa/s
+    ci_sample_mode: str = 'finite'
+    ci_samps_per_chan: int = 1
+
+    ci_start_trigger_source: str = ''
+    ci_start_trigger_edge: str = 'rising'
+
+
+@dataclass
 class UHFLIConfig:
     """Zurich UHFLI lock-in settings — for experiments that use it.
 
@@ -352,7 +391,16 @@ class RuntimeFlags:
     Nruns: int = 1
     reload_pb: bool = True
     load_all_params: bool = False
+    seq_plot_indices: list[int] = field(default_factory=lambda: [0, -1])
 
+    # Detector type: 'analog' (photodiode via AI) or 'counter' (SPD via CI)
+    detector: str = 'analog'
+
+    # Timeseries
+    ts_display_seconds: float = 30.0
+    ts_max_duration: float = 0.0      # 0 = manual stop only
+    ts_buffer_size: int = 0           # 0 = auto
+    ts_contrast_op: str = 's/r'
 
 # ═══════════════════════════════════════════════════════════════════════
 # 4. EXPERIMENT CONFIG — the top-level container
@@ -396,7 +444,7 @@ class ExperimentConfig:
     seq: SequenceConfig = field(default_factory=SequenceConfig)
     daq_ai: DAQAIConfig = field(default_factory=DAQAIConfig)
     daq_ao: DAQAOConfig = field(default_factory=DAQAOConfig)
-    # will add daq_ci later for counter input tasks
+    daq_ci: DAQCIConfig = field(default_factory=DAQCIConfig)
     uhfli: UHFLIConfig = field(default_factory=UHFLIConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     save_opts: SaveConfig = field(default_factory=SaveConfig)
@@ -408,7 +456,7 @@ class ExperimentConfig:
     _active_instruments: set = field(default_factory=set, repr=False)
 
     # Optional instrument fields — only serialized/printed when active.
-    _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'uhfli'}
+    _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'daq_ci', 'uhfli'}
 
     def __post_init__(self):
         """Detect which optional instruments were explicitly passed.
@@ -539,6 +587,9 @@ class ExperimentConfig:
 
         if _include('daq_ao'):
             d['daq_ao'] = _safe_asdict(self.daq_ao)
+
+        if _include('daq_ci'):
+            d['daq_ci'] = _safe_asdict(self.daq_ci)
 
         if _include('uhfli'):
             d['uhfli'] = _safe_asdict(self.uhfli)
@@ -740,8 +791,13 @@ class ExperimentConfig:
                   f"|  rate={self.daq_ai.ai_sample_rate:.0f} Sa/s")
         
         if _show('daq_ao'):
-            print(f"\n  DAQ:  Nsamples={self.daq_ao.ao_samps_per_chan}  "
+            print(f"\n  DAQ AO:  Nsamples={self.daq_ao.ao_samps_per_chan}  "
                   f"|  rate={self.daq_ao.ao_sample_rate:.0f} Sa/s")
+
+        if _show('daq_ci'):
+            print(f"\n  DAQ CI:  counter={self.daq_ci.ci_counter}  "
+                  f"|  input={self.daq_ci.ci_input_terminal}  "
+                  f"|  rate={self.daq_ci.ci_sample_rate:.0f} Sa/s")
 
         if _show('uhfli'):
             print(f"\n  UHFLI:  demod={self.uhfli.demod_index}  "
@@ -749,8 +805,10 @@ class ExperimentConfig:
                   f"|  TC={self.uhfli.timeconstant:.2g} s  "
                   f"|  order={self.uhfli.filter_order}")
 
+        det = self.runtime.detector
         print(f"\n  RUNTIME:  Nruns={self.runtime.Nruns}  "
-              f"|  reload_pb={self.runtime.reload_pb}")
+              f"|  reload_pb={self.runtime.reload_pb}  "
+              f"|  detector={det}")
 
         print(f"\n  PLOT:  {self.plot.x_label}")
         if self.extra:

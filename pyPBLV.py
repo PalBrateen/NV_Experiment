@@ -45,7 +45,7 @@ except ImportError:
 # ============================================================================
 CLOCK_FREQ = 500
 SPINAPI_DLL_PATH = r'C:\SpinCore\SpinAPI\lib\spinapi64.dll'
-WORKING_DIRECTORY = r'C:\NVExperiment\PBStates'  # Default working directory for state files
+WORKING_DIRECTORY = r'D:\Brateen\Saved_Data\SavedStates\PBStates'  # Default working directory for state files
 CHANNEL_CONFIG_FILE = 'pb_channels.json'
 DEFAULT_STATE_FILE = 'last_state.json'
 MAX_CHANNELS = 21  # PulseBlaster has 21 channels (1-21)

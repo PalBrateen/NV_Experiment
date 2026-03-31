@@ -1,27 +1,35 @@
 # session.py — NV Experiment Session Manager
 # =============================================================================
+# Layout: Tabbed left panel (Instruments | Experiment | Config) + plots right
+#
 # Features:
-#   - Instrument init / per-instrument eject
+#   - Instrument init / per-instrument eject / Init PB Only
+#   - Load Config: preview in metadata tree without running
 #   - Experiment launch via mainControl_*.run() in QThread
 #   - Real-time pyqtgraph with:
 #       * Per-run overlay (semi-transparent + running mean)
 #       * Per-outer-combo separate color group
 #       * Shuffled x-axis: pre-allocated from param values, scatter as data arrives
 #       * Click legend to show/hide traces
-#   - Auto-save with crash-safe per-run overwrites
+#   - Default autosave ON, per-run overwrite (crash-safe)
+#   - View Sequence: matplotlib popup (needs PB only)
+#   - Play Sequence: program + start PB at last scan point (needs PB only)
+#   - RUN: experiment in QThread with real-time pyqtgraph
+#   - Save: Saved_Data/YYYY-MM-DD/meas_NNN/ with data + metadata
 # =============================================================================
 
-import sys, time, importlib, traceback
+import sys, time, importlib, traceback, subprocess
 import numpy as np
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QLabel, QPushButton, QComboBox, QCheckBox, QStatusBar,
-    QSplitter, QLineEdit, QMessageBox,
+    QLabel, QPushButton, QComboBox, QCheckBox, QStatusBar,
+    QLineEdit, QMessageBox, QTabWidget, QTreeWidget,
+    QTreeWidgetItem, QHeaderView,
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 import pyqtgraph as pg
 
 from SGcontrol import SignalGenerator, SignalGenerator_sim
@@ -67,6 +75,24 @@ class ClickableLegend(pg.LegendItem):
                 return
         super().mousePressEvent(ev)
 
+# ── metadata tree helper ────────────────────────────────────────────────
+def _populate_tree(parent, data):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            item = QTreeWidgetItem(parent, [str(key), ""])
+            if isinstance(value, (dict, list)):
+                _populate_tree(item, value)
+                item.setExpanded(True)
+            else:
+                item.setText(1, str(value))
+    elif isinstance(data, list):
+        for i, value in enumerate(data):
+            item = QTreeWidgetItem(parent, [f"[{i}]", ""])
+            if isinstance(value, (dict, list)):
+                _populate_tree(item, value)
+                item.setExpanded(True)
+            else:
+                item.setText(1, str(value))
 
 # ── ExperimentThread ────────────────────────────────────────────────────────
 class ExperimentThread(QThread):
@@ -124,6 +150,13 @@ QPushButton:disabled{color:#555}
 QComboBox,QLineEdit{background:#2d2d2d;border:1px solid #3c3c3c;
   border-radius:3px;padding:3px 6px}
 QStatusBar{background:#252526}
+QTabWidget::pane{border:1px solid #3c3c3c;background:#1e1e1e}
+QTabBar::tab{background:#2d2d2d;border:1px solid #3c3c3c;
+  padding:4px 10px;margin-right:2px;border-top-left-radius:3px;
+  border-top-right-radius:3px}
+QTabBar::tab:selected{background:#1e1e1e;border-bottom-color:#1e1e1e}
+QTreeWidget{background:#252526;border:none;color:#d4d4d4}
+QTreeWidget::item:alternate{background:#2a2a2a}
 """
 
 
@@ -133,12 +166,13 @@ class SessionManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("NV Session Manager")
-        self.setMinimumSize(1060, 680)
+        self.setMinimumSize(1100, 720)
         self.setStyleSheet(_SS)
 
         self.sg = None; self.pb = None; self.ao_task = None
         self.camera_worker = None
         self.instruments_connected = False
+        self._pb_ready = False
 
         self.experiment_thread: Optional[ExperimentThread] = None
         self.is_running = False
@@ -147,6 +181,9 @@ class SessionManager(QMainWindow):
         # Per-(outer, run) curve storage
         self._curves: dict[str, pg.PlotDataItem] = {}
 
+        self._loaded_config = None
+        self._loaded_config_name = ""
+
         self._build_ui()
         self._upd.connect(self._on_plot, Qt.QueuedConnection)
 
@@ -154,58 +191,121 @@ class SessionManager(QMainWindow):
 
     def _build_ui(self):
         c = QWidget(); self.setCentralWidget(c)
-        root = QVBoxLayout(c); root.setContentsMargins(8, 8, 8, 8)
+        root = QHBoxLayout(c); root.setContentsMargins(4, 4, 4, 4)
 
-        # Instruments
-        ig = QGroupBox("Instruments"); il = QVBoxLayout(ig)
+        # Left: tabs
+        self._tabs = QTabWidget()
+        self._tabs.setMaximumWidth(340); self._tabs.setMinimumWidth(260)
+        self._tabs.addTab(self._build_instruments_tab(), "Instruments")
+        self._tabs.addTab(self._build_experiment_tab(), "Experiment")
+        self._tabs.addTab(self._build_metadata_tab(), "Config")
+        root.addWidget(self._tabs)
+
+        # Right: plots
+        pw = QWidget(); pv = QVBoxLayout(pw)
+        pv.setContentsMargins(0, 0, 0, 0)
+        self.sweep_plot = pg.PlotWidget(title="Sweep")
+        self.sweep_plot.addLegend(offset=(10, 10))
+        self.sweep_plot.setLabel('bottom', 'Parameter')
+        self.sweep_plot.setLabel('left', 'Signal')
+        self.sweep_plot.showGrid(x=True, y=True, alpha=0.3)
+        pv.addWidget(self.sweep_plot, stretch=2)
+        self.raw_plot = pg.PlotWidget(title="Raw Trace")
+        self.raw_plot.setLabel('bottom', 'Sample')
+        self.raw_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1))
+        pv.addWidget(self.raw_plot, stretch=1)
+        root.addWidget(pw, stretch=1)
+
+        self.sbar = QStatusBar(); self.setStatusBar(self.sbar)
+        self.lbl_st = QLabel("Ready"); self.sbar.addWidget(self.lbl_st, 1)
+
+    def _build_instruments_tab(self):
+        w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(6,6,6,6)
         mono = "font-family:'Consolas','Courier New',monospace;font-size:12px"
         self.lbl_sg = QLabel("SG:  ○"); self.lbl_sg.setStyleSheet(mono)
         self.lbl_pb = QLabel("PB:  ○"); self.lbl_pb.setStyleSheet(mono)
         self.lbl_ao = QLabel("AO:  ○"); self.lbl_ao.setStyleSheet(mono)
         self.lbl_cam = QLabel("Cam: ○"); self.lbl_cam.setStyleSheet(mono)
         for l in (self.lbl_sg, self.lbl_pb, self.lbl_ao, self.lbl_cam):
-            il.addWidget(l)
-
-        br = QHBoxLayout()
+            vl.addWidget(l)
+        r1 = QHBoxLayout()
         self.btn_init = QPushButton("Init All")
         self.btn_init.clicked.connect(self._init_instruments)
-        br.addWidget(self.btn_init)
+        r1.addWidget(self.btn_init)
         self.chk_sim = QCheckBox("Sim SG"); self.chk_sim.setChecked(True)
-        br.addWidget(self.chk_sim)
-        # Per-instrument eject buttons
-        for name in ('SG', 'PB', 'AO'):
-            b = QPushButton(f"Eject {name}")
-            b.setMaximumWidth(80)
-            b.clicked.connect(lambda checked, n=name: self._eject(n))
-            br.addWidget(b)
-        br.addStretch()
-        il.addLayout(br)
-        root.addWidget(ig)
+        r1.addWidget(self.chk_sim)
+        vl.addLayout(r1)
+        r2 = QHBoxLayout()
+        for nm in ('SG','PB','AO'):
+            b = QPushButton(f"Eject {nm}"); b.setMaximumWidth(80)
+            b.clicked.connect(lambda _, n=nm: self._eject(n))
+            r2.addWidget(b)
+        r2.addStretch()
+        vl.addLayout(r2)
+        self.btn_init_pb = QPushButton("Init PB Only")
+        self.btn_init_pb.setStyleSheet(
+            "QPushButton{background:#2d4a2d}QPushButton:hover{background:#3a5f3a}")
+        self.btn_init_pb.clicked.connect(self._init_pb_only)
+        vl.addWidget(self.btn_init_pb)
 
-        # Splitter: launcher | plots
-        sp = QSplitter(Qt.Horizontal)
+        # ── Tool launchers (subprocess — no parameter return) ────────
+        vl.addWidget(QLabel(""))  # spacer
+        lbl = QLabel("Tools (separate process):")
+        lbl.setStyleSheet("color:#888;font-size:11px")
+        vl.addWidget(lbl)
+        tr = QHBoxLayout()
+        self.btn_launch_scope = QPushButton("📊 DAQ Scope")
+        self.btn_launch_scope.setToolTip("Launch scope_v2_main.py in a new process")
+        self.btn_launch_scope.clicked.connect(
+            lambda: self._launch_tool('scope_v2_main.py'))
+        tr.addWidget(self.btn_launch_scope)
+        self.btn_launch_pb_gui = QPushButton("🔧 PB GUI")
+        self.btn_launch_pb_gui.setToolTip("Launch pyPBLV.py in a new process")
+        self.btn_launch_pb_gui.clicked.connect(
+            lambda: self._launch_tool('pyPBLV.py'))
+        tr.addWidget(self.btn_launch_pb_gui)
+        vl.addLayout(tr)
 
-        # Left: launcher
-        lg = QGroupBox("Experiment"); ll = QVBoxLayout(lg)
-        ll.addWidget(QLabel("Config:"))
+        vl.addStretch()
+        return w
+
+    def _build_experiment_tab(self):
+        w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(6,6,6,6)
+        vl.addWidget(QLabel("Config module:"))
         self.cb_cfg = QComboBox(); self.cb_cfg.setEditable(True)
-        self.cb_cfg.addItems(['esr_config', 'rabi_config', 'echo_config',
-                              't1_config', 't2_config'])
-        ll.addWidget(self.cb_cfg)
-        ll.addWidget(QLabel("Script:"))
+        self.cb_cfg.addItems(['esr_config','rabi_config','echo_config',
+                              't1_config','t2_config','ramsey_config'])
+        vl.addWidget(self.cb_cfg)
+        vl.addWidget(QLabel("Script:"))
         self.cb_scr = QComboBox(); self.cb_scr.setEditable(True)
-        self.cb_scr.addItems(['mainControl_diode', 'mainControl_camera'])
-        ll.addWidget(self.cb_scr)
+        self.cb_scr.addItems(['mainControl_diode','mainControl_camera'])
+        vl.addWidget(self.cb_scr)
+
+        mr = QHBoxLayout()
+        mr.addWidget(QLabel("Mode:"))
+        self.cb_mode = QComboBox()
+        self.cb_mode.addItems(['Sweep', 'Timeseries'])
+        mr.addWidget(self.cb_mode)
+        mr.addStretch()
+        vl.addLayout(mr)
 
         self.chk_rt = QCheckBox("Real-time plot"); self.chk_rt.setChecked(True)
-        ll.addWidget(self.chk_rt)
-        self.chk_save = QCheckBox("Auto-save"); ll.addWidget(self.chk_save)
+        vl.addWidget(self.chk_rt)
+        hr = QHBoxLayout()
+        self.chk_save = QCheckBox("Auto-save"); self.chk_save.setChecked(True)
+        hr.addWidget(self.chk_save)
+        hr.addWidget(QLabel("#:"))
+        self.txt_f = QLineEdit("001"); self.txt_f.setMaximumWidth(50)
+        hr.addWidget(self.txt_f); hr.addStretch()
+        vl.addLayout(hr)
 
-        hf = QHBoxLayout()
-        hf.addWidget(QLabel("Folder #:"))
-        self.txt_f = QLineEdit("001"); self.txt_f.setMaximumWidth(60)
-        hf.addWidget(self.txt_f); hf.addStretch()
-        ll.addLayout(hf)
+        self.btn_load_cfg = QPushButton("📋  Load Config")
+        self.btn_load_cfg.setStyleSheet(
+            "QPushButton{background:#3d3d1d;font-weight:bold}"
+            "QPushButton:hover{background:#4d4d2d}")
+        self.btn_load_cfg.clicked.connect(self._load_config)
+        vl.addWidget(self.btn_load_cfg)
 
         self.btn_run = QPushButton("▶  RUN")
         self.btn_run.setStyleSheet(
@@ -215,7 +315,7 @@ class SessionManager(QMainWindow):
             "QPushButton:disabled{background:#333;color:#666}")
         self.btn_run.clicked.connect(self._run_experiment)
         self.btn_run.setEnabled(False)
-        ll.addWidget(self.btn_run)
+        vl.addWidget(self.btn_run)
 
         self.btn_stop = QPushButton("⏹  STOP")
         self.btn_stop.setStyleSheet(
@@ -223,35 +323,51 @@ class SessionManager(QMainWindow):
             "QPushButton:hover{background:#8b2222}")
         self.btn_stop.clicked.connect(self._stop_experiment)
         self.btn_stop.setEnabled(False)
-        ll.addWidget(self.btn_stop)
-        ll.addStretch()
-        sp.addWidget(lg)
+        vl.addWidget(self.btn_stop)
 
-        # Right: plots
-        pw = QWidget(); pv = QVBoxLayout(pw)
-        pv.setContentsMargins(0, 0, 0, 0)
+        sr = QHBoxLayout()
+        self.btn_view_seq = QPushButton("🔍 View")
+        self.btn_view_seq.setToolTip("View Sequence (needs PB)")
+        self.btn_view_seq.setStyleSheet(
+            "QPushButton{background:#2d5f2d}QPushButton:hover{background:#3a7a3a}")
+        self.btn_view_seq.clicked.connect(self._view_sequence)
+        self.btn_view_seq.setEnabled(False)
+        sr.addWidget(self.btn_view_seq)
+        self.btn_play_seq = QPushButton("▶ Play")
+        self.btn_play_seq.setToolTip("Play Sequence on PB (needs PB)")
+        self.btn_play_seq.setStyleSheet(
+            "QPushButton{background:#2d4a5f}QPushButton:hover{background:#3a6a7a}")
+        self.btn_play_seq.clicked.connect(self._play_sequence)
+        self.btn_play_seq.setEnabled(False)
+        sr.addWidget(self.btn_play_seq)
+        vl.addLayout(sr)
+        vl.addStretch()
+        return w
 
-        self.sweep_plot = pg.PlotWidget(title="Sweep")
-        self.sweep_plot.addLegend(offset=(10, 10))
-        self.sweep_plot.setLabel('bottom', 'Parameter')
-        self.sweep_plot.setLabel('left', 'Signal')
-        self.sweep_plot.showGrid(x=True, y=True, alpha=0.3)
-        pv.addWidget(self.sweep_plot, stretch=2)
+    def _build_metadata_tab(self):
+        w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(4,4,4,4)
+        self._meta_tree = QTreeWidget()
+        self._meta_tree.setColumnCount(2)
+        self._meta_tree.setHeaderLabels(["Parameter","Value"])
+        self._meta_tree.setAlternatingRowColors(True)
+        self._meta_tree.setRootIsDecorated(True)
+        self._meta_tree.header().setSectionResizeMode(0,QHeaderView.ResizeToContents)
+        self._meta_tree.header().setSectionResizeMode(1,QHeaderView.Stretch)
+        vl.addWidget(self._meta_tree)
+        return w
 
-        self.raw_plot = pg.PlotWidget(title="Raw Trace")
-        self.raw_plot.setLabel('bottom', 'Sample')
-        self.raw_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1))
-        pv.addWidget(self.raw_plot, stretch=1)
+    def _update_metadata_tree(self, config):
+        self._meta_tree.clear()
+        try:
+            _populate_tree(self._meta_tree.invisibleRootItem(),
+                           config.to_dict(include_values=False))
+        except Exception as e:
+            QTreeWidgetItem(self._meta_tree.invisibleRootItem(),
+                            ["Error", str(e)])
 
-        sp.addWidget(pw)
-        sp.setStretchFactor(0, 1); sp.setStretchFactor(1, 3)
-        root.addWidget(sp, stretch=1)
-
-        self.sbar = QStatusBar(); self.setStatusBar(self.sbar)
-        self.lbl_st = QLabel("Ready"); self.sbar.addWidget(self.lbl_st, 1)
-
-    # ── instruments ─────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════
+    #  INSTRUMENTS
+    # ════════════════════════════════════════════════════════════════
 
     def _init_instruments(self):
         try:
@@ -265,22 +381,38 @@ class SessionManager(QMainWindow):
                 self.sg = SignalGenerator()
                 self.sg.query_all()
                 self.lbl_sg.setText(f"SG:  ● {self.sg.freq/1e9:.4f} GHz")
-
-            base = {'pb': {'clk_cyc': 1e3 / concfg.PBclk},
-                    'scan': {}, 'seq': {}, 'mw': {}}
-            self.pb = PulseBlaster(base); self.pb.configure()
-            self.lbl_pb.setText("PB:  ● configured")
-
+            if not self._pb_ready:
+                self._do_init_pb()
             self.ao_task = AnalogOutputTask(
                 dev="P6363", channels=[0, 1, 2], coil='small_confocal')
             self.lbl_ao.setText("AO:  ● ready")
 
             self.instruments_connected = True
             self.btn_run.setEnabled(True)
+            self._update_seq_btns()
             self.lbl_st.setText("✔ Instruments initialized")
         except Exception as e:
             self.lbl_st.setText(f"❌ {e}")
             print(traceback.format_exc())
+
+    def _init_pb_only(self):
+        try:
+            self.lbl_st.setText("Initializing PB…"); QApplication.processEvents()
+            self._do_init_pb()
+            self._update_seq_btns()
+            self.lbl_st.setText("✔ PB ready — View/Play enabled")
+        except Exception as e:
+            self.lbl_st.setText(f"❌ PB: {e}"); print(traceback.format_exc())
+
+    def _do_init_pb(self):
+        base = {'pb':{'clk_cyc':1e3/concfg.PBclk},'scan':{},'seq':{},'mw':{}}
+        self.pb = PulseBlaster(base); self.pb.configure()
+        self.lbl_pb.setText("PB:  ● configured")
+        self._pb_ready = True
+
+    def _update_seq_btns(self):
+        self.btn_view_seq.setEnabled(self._pb_ready)
+        self.btn_play_seq.setEnabled(self._pb_ready)
 
     def _eject(self, name: str):
         """Eject a single instrument.  Object set to None; session stays."""
@@ -294,6 +426,8 @@ class SessionManager(QMainWindow):
                 except: pass
                 self.pb.closePB(); self.pb = None
                 self.lbl_pb.setText("PB:  ○ ejected")
+                self._pb_ready = False
+                self._update_seq_btns()
             elif name == 'AO' and self.ao_task:
                 self.ao_task.set_outputs_to_constant([0, 0, 0])
                 time.sleep(0.2); self.ao_task.__del__()
@@ -303,11 +437,73 @@ class SessionManager(QMainWindow):
         except Exception as e:
             self.lbl_st.setText(f"❌ Eject {name}: {e}")
 
+    # ════════════════════════════════════════════════════════════════
+    #  TOOL LAUNCHERS (subprocess — fire and forget)
+    # ════════════════════════════════════════════════════════════════
+
+    def _launch_tool(self, script_name: str):
+        """Launch a tool script in a separate process.
+
+        The child process is fully independent — it manages its own
+        DAQ tasks, PB connection, etc.  No parameter return needed
+        for DAQ Scope or PB GUI (they don't modify session state).
+
+        For camera viewer (future), use in-process launch instead
+        so the session can read back exposure/ROI on close.
+        """
+        script = Path(script_name)
+        if not script.exists():
+            # Try common locations
+            for candidate in [Path('.') / script_name,
+                              Path('scope_v2') / script_name,
+                              Path('..') / script_name]:
+                if candidate.exists():
+                    script = candidate
+                    break
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(script)],
+                cwd=str(script.parent) if script.parent != Path('.') else None,
+            )
+            self.lbl_st.setText(f"✔ Launched {script_name} (PID {proc.pid})")
+        except Exception as e:
+            self.lbl_st.setText(f"❌ Launch {script_name}: {e}")
+
+    # ════════════════════════════════════════════════════════════════
+    #  LOAD CONFIG
+    # ════════════════════════════════════════════════════════════════
+
+    def _load_config(self):
+        cn = self.cb_cfg.currentText()
+        try:
+            cm = importlib.import_module(cn); importlib.reload(cm)
+        except Exception as e:
+            self.lbl_st.setText(f"❌ Import: {e}"); return
+        if not hasattr(cm,'config'):
+            self.lbl_st.setText(f"❌ {cn} has no 'config'"); return
+        self._loaded_config = cm.config
+        self._loaded_config_name = cn
+        self._update_metadata_tree(cm.config)
+        self._tabs.setCurrentIndex(2)
+        self.lbl_st.setText(f"✔ Loaded {cn}")
+
+    def _ensure_config(self):
+        cn = self.cb_cfg.currentText()
+        if self._loaded_config is None or self._loaded_config_name != cn:
+            self._load_config()
+        return self._loaded_config
+
     # ── run ─────────────────────────────────────────────────────────────
 
     def _run_experiment(self):
         if not self.instruments_connected: return
+        mode = self.cb_mode.currentText()
+        if mode == 'Timeseries':
+            self._run_timeseries()
+        else:
+            self._run_sweep()
 
+    def _run_sweep(self):
         cn = self.cb_cfg.currentText(); sn = self.cb_scr.currentText()
         try:
             cm = importlib.import_module(cn); importlib.reload(cm)
@@ -322,6 +518,9 @@ class SessionManager(QMainWindow):
         if not hasattr(cm, 'config'):
             self.lbl_st.setText(f"❌ {cn} has no 'config' attribute"); return
         exp_config = cm.config
+        self._loaded_config = exp_config
+        self._loaded_config_name = cn
+        self._update_metadata_tree(exp_config)
 
         instr = {'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task}
 
@@ -330,7 +529,7 @@ class SessionManager(QMainWindow):
             dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
             dd.mkdir(parents=True, exist_ok=True)
             fn = self.txt_f.text().strip() or "001"
-            sp = dd / f"{exp_config.seq.name}_{fn}"; sp.mkdir(exist_ok=True)
+            sp = dd / f"meas_{fn}"; sp.mkdir(exist_ok=True)
 
         # Clear plots
         self.sweep_plot.clear()
@@ -358,16 +557,190 @@ class SessionManager(QMainWindow):
         self.is_running = True
         self.btn_run.setEnabled(False); self.btn_stop.setEnabled(True)
         self.btn_init.setEnabled(False)
+        self.btn_view_seq.setEnabled(False); self.btn_play_seq.setEnabled(False)
         self.lbl_st.setText(f"Running {cn}…")
+
+    # ════════════════════════════════════════════════════════════════
+    #  RUN TIMESERIES
+    # ════════════════════════════════════════════════════════════════
+
+    def _run_timeseries(self):
+        cn = self.cb_cfg.currentText()
+        try:
+            cm = importlib.import_module(cn); importlib.reload(cm)
+        except Exception as e:
+            self.lbl_st.setText(f"❌ Import: {e}"); return
+        if not hasattr(cm, 'config'):
+            self.lbl_st.setText(f"❌ {cn} has no 'config'"); return
+
+        exp_config = cm.config
+        self._loaded_config = exp_config
+        self._loaded_config_name = cn
+        self._update_metadata_tree(exp_config)
+
+        instr = {'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task}
+
+        from timeseries_experiment import TimeseriesExperiment
+
+        try:
+            self._ts_exp = TimeseriesExperiment(instr, exp_config)
+            self._ts_exp.setup()
+        except Exception as e:
+            self.lbl_st.setText(f"❌ TS setup: {e}")
+            print(traceback.format_exc()); return
+
+        # Switch plots to timeseries mode
+        self.sweep_plot.clear()
+        self.sweep_plot.setTitle("Contrast Timeseries")
+        self.sweep_plot.setLabel('bottom', 'Time', units='s')
+        self.sweep_plot.setLabel('left', 'Contrast')
+        self._ts_contrast_curve = self.sweep_plot.plot(
+            pen=_pen(0, 220, 1.5))
+        self.raw_curve = self.raw_plot.plot(
+            pen=_pen(3, width=1), clear=True)
+
+        # 30 Hz display refresh
+        self._ts_display_timer = QTimer()
+        self._ts_display_timer.timeout.connect(self._ts_refresh)
+        self._ts_display_timer.start(33)
+
+        # Save path
+        sp = None
+        if self.chk_save.isChecked():
+            fn = self.txt_f.text().strip() or "001"
+            dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
+            dd.mkdir(parents=True, exist_ok=True)
+            sp = dd / f"meas_{fn}"; sp.mkdir(exist_ok=True)
+        self._ts_save_path = sp
+
+        self._ts_exp.start()
+
+        self.is_running = True
+        self.btn_run.setEnabled(False); self.btn_stop.setEnabled(True)
+        self.btn_init.setEnabled(False)
+        self.btn_view_seq.setEnabled(False); self.btn_play_seq.setEnabled(False)
+        self.lbl_st.setText(
+            f"TS: {self._ts_exp.sequence} @ "
+            f"{self._ts_exp.scan_name}={self._ts_exp.fixed_value:.4g}")
+
+    def _ts_refresh(self):
+        """30 Hz display update for timeseries mode."""
+        if not hasattr(self, '_ts_exp') or self._ts_exp is None:
+            return
+        exp = self._ts_exp
+
+        # Contrast scrolling plot
+        if exp.contrast_ring is not None:
+            cdata = exp.contrast_ring.get_ordered()
+            if len(cdata) > 0:
+                sample_rate = exp.cfg.daq_ai.ai_sample_rate
+                contrast_rate = sample_rate / exp.chunk_samples
+                t = np.arange(-len(cdata), 0) / contrast_rate
+                self._ts_contrast_curve.setData(t, cdata)
+
+        # Raw: show latest chunk
+        if exp.raw_ring is not None and exp.raw_ring.total_count > 0:
+            rdata = exp.raw_ring.get_ordered()
+            n_show = min(len(rdata), exp.chunk_samples * 3)
+            if n_show > 0:
+                self.raw_curve.setData(rdata[-n_show:])
+
+        # Status
+        elapsed = time.perf_counter() - exp._start_time
+        n_c = exp.contrast_ring.total_count if exp.contrast_ring else 0
+        self.lbl_st.setText(
+            f"TS: {elapsed:.1f}s | {n_c} contrast pts | "
+            f"{sum(len(c) for c in exp.full_chunks):,} raw samples")
+
+        # Check if auto-stopped
+        if not exp.is_running and self.is_running:
+            self._ts_stop()
+
+    def _ts_stop(self):
+        """Stop timeseries and save."""
+        if hasattr(self, '_ts_display_timer'):
+            self._ts_display_timer.stop()
+        if hasattr(self, '_ts_exp') and self._ts_exp is not None:
+            self._ts_exp.stop()
+            if self._ts_save_path:
+                fn = self.txt_f.text().strip() or "001"
+                self._ts_exp.save(
+                    self._ts_save_path / f"ts_{fn}", fmt='npz')
+            self._ts_exp.teardown()
+
+        self.is_running = False
+        self.btn_run.setEnabled(True); self.btn_stop.setEnabled(False)
+        self.btn_init.setEnabled(True); self._update_seq_btns()
+        self.lbl_st.setText("✔ Timeseries done")
+
+    # ════════════════════════════════════════════════════════════════
+    #  VIEW SEQUENCE (PB only)
+    # ════════════════════════════════════════════════════════════════
+
+    def _view_sequence(self):
+        if not self._pb_ready:
+            self.lbl_st.setText("❌ PB not initialized"); return
+        cfg = self._ensure_config()
+        if cfg is None: return
+
+        instr = {'sg':self.sg,'pb':self.pb,'ao_task':self.ao_task}
+        from experiment_base import DiodeExperiment
+        import matplotlib.pyplot as plt
+        try:
+            exp = DiodeExperiment(instr, cfg)
+            idx = getattr(cfg.runtime,'seq_plot_indices',[0,-1])
+            exp.view_sequences(indices=idx, dpi=100)
+            plt.show()
+            self.lbl_st.setText("✔ Sequence plots shown")
+        except Exception as e:
+            self.lbl_st.setText(f"❌ View: {e}"); print(traceback.format_exc())
+
+    # ════════════════════════════════════════════════════════════════
+    #  PLAY SEQUENCE (PB only)
+    # ════════════════════════════════════════════════════════════════
+
+    def _play_sequence(self):
+        """Program + start PB at last seq_plot_indices value."""
+        if not self._pb_ready:
+            self.lbl_st.setText("❌ PB not initialized"); return
+        cfg = self._ensure_config()
+        if cfg is None: return
+
+        try:
+            args_names = cfg.seq.args_names
+            seq_args = list(cfg.seq.args_values)
+            sn = cfg.scan_names[0] if cfg.scan_names else ''
+            pv = cfg.scans[sn].values if sn else np.array([0])
+
+            indices = getattr(cfg.runtime,'seq_plot_indices',[0,-1])
+            pi = indices[-1]
+            if pi < 0: pi = len(pv) + pi
+            val = pv[pi]
+
+            is_freq = cfg.seq.name in (
+                'esr_dig_mod_seq','esr_seq','pesr_seq','modesr','drift_seq')
+            if is_freq:
+                sal = seq_args
+            elif sn in args_names:
+                sal = list(seq_args); sal[args_names.index(sn)] = val
+            else:
+                sal = [val] + seq_args
+
+            _, the_list = PulseBlaster.PB_program(
+                'diode', cfg.seq.name, sal + [cfg.pb.channels])
+            self.pb.run_sequence_for_diode(
+                [the_list[i][0] for i in range(len(the_list))])
+            self.lbl_st.setText(f"▶ PB: {cfg.seq.name} @ {sn}={val:.4g}")
+        except Exception as e:
+            self.lbl_st.setText(f"❌ Play: {e}"); print(traceback.format_exc())
 
     # ── real-time plot (main thread) ────────────────────────────────────
 
     @Slot(int, float, int, int, str, object, object)
     def _on_plot(self, inner_idx, val, i_run, oc_idx, oc_str, proc, raw):
-        total_inner = len(self._inner_vals)
         self.lbl_st.setText(
             f"Outer {oc_idx+1}  Run {i_run+1}/{self._Nruns}  "
-            f"Pt {inner_idx+1}/{total_inner}"
+            f"Pt {inner_idx+1}/{len(self._inner_vals)}"
             f"{'  '+oc_str if oc_str else ''}")
 
         if not self.chk_rt.isChecked():
@@ -429,6 +802,8 @@ class SessionManager(QMainWindow):
         self.last_exp = exp  # accessible from IPython later
         self.btn_run.setEnabled(True); self.btn_stop.setEnabled(False)
         self.btn_init.setEnabled(True)
+        self._update_seq_btns()
+
         sh = " × ".join(str(s) for s in data.shape)
         self.lbl_st.setText(f"✔ Done — data {sh}")
 
@@ -437,11 +812,14 @@ class SessionManager(QMainWindow):
         self.is_running = False
         self.btn_run.setEnabled(True); self.btn_stop.setEnabled(False)
         self.btn_init.setEnabled(True)
+        self._update_seq_btns()
         self.lbl_st.setText("❌ Error (see console)")
         print(tb)
 
     def _stop_experiment(self):
-        if self.experiment_thread:
+        if self.cb_mode.currentText() == 'Timeseries':
+            self._ts_stop()
+        elif self.experiment_thread:
             self.experiment_thread.request_stop()
             self.lbl_st.setText("⏹ Stopping…")
 
@@ -453,6 +831,9 @@ class SessionManager(QMainWindow):
                                      "Stop and quit?",
                                      QMessageBox.Yes | QMessageBox.No)
             if r == QMessageBox.No: ev.ignore(); return
+            # Stop whatever is running
+            if hasattr(self, '_ts_exp') and self._ts_exp and self._ts_exp.is_running:
+                self._ts_stop()
             if self.experiment_thread:
                 self.experiment_thread.request_stop()
                 self.experiment_thread.wait(3000)

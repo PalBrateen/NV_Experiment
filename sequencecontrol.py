@@ -62,8 +62,6 @@ _DIODE_SEQUENCES = {
     'esr_dig_mod_seq':      daq_seq.make_dig_mod_odmr_sequence,
     'rabi_dig_mod_seq':     daq_seq.make_dig_mod_rabi_sequence,
     'rabi_contrast_seq':    daq_seq.make_rabi_contrast_sequence,
-    't1ms0_train':          daq_seq.make_t1ms0_train_sequence,
-
 }
 
 _CAM_SEQUENCES = {
@@ -270,7 +268,7 @@ def plot_sequence(instructions: list, channel_map: dict):
 
 def view_sequence(instr: str, sequence: str, seq_args: list,
                   param_values=None, indices=None,
-                  dpi: int = 100):
+                  param_index: int = 0, dpi: int = 100):
     """Compile and plot PB sequences at one or more parameter values.
 
     Parameters
@@ -281,11 +279,15 @@ def view_sequence(instr: str, sequence: str, seq_args: list,
         Sequence name.
     seq_args : list
         Full sequence args list (last element = pb_channels dict).
-        For PB-timing sweeps, seq_args[0] is overwritten per value.
+        NOT mutated — a copy is made internally.
     param_values : array-like, optional
         Sweep values to plot.  If None, plots the sequence as-is.
     indices : list[int], optional
         Which indices into param_values to plot (default: [0]).
+        Supports negative indexing (e.g. [-1] for last point).
+    param_index : int
+        Which position in seq_args to overwrite with the param value.
+        Default 0 (legacy prepend position).
     dpi : int
         Figure DPI.
 
@@ -298,19 +300,25 @@ def view_sequence(instr: str, sequence: str, seq_args: list,
         'esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq']
 
     if param_values is None:
-        param_values = [seq_args[0]]
+        param_values = [seq_args[param_index]]
         indices = [0]
     if indices is None:
         indices = [0]
 
+    # Resolve negative indices
+    n = len(param_values)
+    indices = [i % n if i < 0 else i for i in indices]
+
     pb_channels = seq_args[-1]  # last arg is always the channel map
 
     for idx in indices:
+        # Work on a copy — never mutate the caller's list
+        args_copy = list(seq_args)
         if not freq_only:
-            seq_args[0] = param_values[idx]
+            args_copy[param_index] = param_values[idx]
 
         _, the_list = PBcontrol.PulseBlaster.PB_program(
-            instr, sequence, seq_args)
+            instr, sequence, args_copy)
 
         for sub in the_list:
             inst_list = sub[0]

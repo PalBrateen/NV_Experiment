@@ -57,8 +57,9 @@ from dataclasses import dataclass, field
 
 import connectionConfig as concfg
 from PBcontrol import PulseBlaster
-from DAQcontrol import AnalogInputTask, AnalogOutputTask
-from sequencecontrol import plot_sequence as _plot_sequence
+from DAQcontrol import AnalogInputTask, AnalogOutputTask, CounterInputTask
+from sequencecontrol import (plot_sequence as _plot_sequence,
+                             view_sequence as _view_sequence)
 from spinapi import ns, us, ms, Inst
 from sweep_utils import Sweep, SweepIndex, make_pb_setter
 
@@ -132,7 +133,7 @@ def read_details(sequence: str, n_channels: int, Nsamples_cfg: int):
     elif 'lia' in sequence:
         rpc = [1, 1] if n_channels == 2 else [1]
     else:
-        rpc = [2, 2] if n_channels == 2 else [1]
+        rpc = [2, 2] if n_channels == 2 else [2]
     return rpc, sum(rpc) * Nsamples_cfg
 
 
@@ -538,15 +539,33 @@ class DiodeExperiment:
         if self.ao_task is not None:
             self.ao_task.set_outputs_to_constant(output_field_in_gauss=tf)
 
-        # AI task (per-point read size; batch mode re-creates in execute)
-        self.ai_task = AnalogInputTask(
-            voltage_range=(-10, 10),
-            channels=concfg.input_terminals,
-            sampling_rate=cfg.daq_ai.ai_sample_rate,
-            sampling_source='',
-            start_trigger_source=concfg.start_trig_terminal,
-            samps_per_chan=int(self.daq_Nsamples),
-        )
+        # AI / CI task (per-point read size; batch mode re-creates in execute)
+        if cfg.runtime.detector == 'counter':
+            ci = cfg.daq_ci
+            self.ai_task = CounterInputTask(
+                dev=ci.ci_counter.split('/')[0],
+                counter=[int(ci.ci_counter.split('ctr')[-1])],
+                sampling_source=(concfg.samp_clk_terminal
+                                 if not ci.ci_sample_source
+                                 else ci.ci_sample_source),
+                sampling_rate=cfg.daq_ai.ai_sample_rate,
+                sampling_mode='finite',
+                samps_per_chan=int(self.daq_Nsamples),
+                start_trigger_source=concfg.start_trig_terminal,
+            )
+            self.n_channels = 1  # counter is always single-channel
+            print(f"▶ Detector: COUNTER ({ci.ci_counter}, "
+                  f"input={ci.ci_input_terminal})")
+        else:
+            self.ai_task = AnalogInputTask(
+                voltage_range=(-10, 10),
+                channels=concfg.input_terminals,
+                sampling_rate=cfg.daq_ai.ai_sample_rate,
+                sampling_source='',
+                start_trigger_source=concfg.start_trig_terminal,
+                samps_per_chan=int(self.daq_Nsamples),
+            )
+            print(f"▶ Detector: ANALOG (ai{concfg.input_terminals})")
 
         # Data array
         self.data_array = np.zeros((
@@ -676,6 +695,63 @@ class DiodeExperiment:
         return None
 
     # ══════════════════════════════════════════════════════════════════
+    #  VIEW SEQUENCES — plot PB timing at selected scan points
+    # ══════════════════════════════════════════════════════════════════
+
+    def view_sequences(self, indices: Optional[list[int]] = None,
+                       dpi: int = 100):
+        """Plot PB pulse sequences at selected inner-param values.
+
+        Builds the correct seqArgList from config (handling legacy
+        prepend vs in-args), then delegates to sequencecontrol.view_sequence.
+
+        Parameters
+        ----------
+        indices : list[int], optional
+            Which indices into the inner param_values array to plot.
+            Supports negative indexing ([-1] = last point).
+            Default: from config.runtime.seq_plot_indices, or [0, -1].
+        dpi : int
+            Matplotlib figure DPI.
+
+        Can be called before or after setup().  Does NOT mutate any
+        experiment state — uses copies of all args.
+        """
+        cfg = self.cfg
+
+        if indices is None:
+            indices = getattr(cfg.runtime, 'seq_plot_indices', [0, -1])
+
+        # Build the seqArgList in the same layout PB_program expects
+        args_names = cfg.seq.args_names
+        seq_args_base = list(cfg.seq.args_values)
+
+        if self._is_freq_sweep:
+            # PB program is fixed for freq sweeps — just plot once
+            full_args = seq_args_base + [self.pb_channels]
+            _view_sequence(
+                self.instr, self.sequence, full_args,
+                param_values=None, indices=[0], dpi=dpi)
+            return
+
+        # Determine inner param position
+        if self.scan_name in args_names:
+            # In-args: param lives at its args_names index
+            pidx = args_names.index(self.scan_name)
+            full_args = seq_args_base + [self.pb_channels]
+        else:
+            # Legacy prepend: param goes at index 0
+            pidx = 0
+            full_args = [self.param_values[0]] + seq_args_base + [self.pb_channels]
+
+        _view_sequence(
+            self.instr, self.sequence, full_args,
+            param_values=self.param_values,
+            indices=indices,
+            param_index=pidx,
+            dpi=dpi)
+
+    # ══════════════════════════════════════════════════════════════════
     #  EXECUTE — dispatch to appropriate mode
     # ══════════════════════════════════════════════════════════════════
 
@@ -730,12 +806,21 @@ class DiodeExperiment:
         Both iterate inner points one-by-one with per-point DAQ reads.
         The only difference is what the inner setter does (PB reprogram
         vs instrument-only), which is already baked into the Sweep object.
+
+        IMPORTANT: We do NOT use sweep.inner_iter() here because it calls
+        the setter before yielding — but we need to check _valid_mask
+        BEFORE the setter fires (invalid cells would cause PB_program to
+        crash with bad timing values).  Instead, we iterate inner_values
+        directly and call the setter ourselves only for valid cells.
         """
         self.scan_times = []
         t_start = time.perf_counter()
         t_total_s = self._t_total_s
         timeout = t_total_s * self.Nsamples_cfg + 5
         stopped = False
+
+        inner_vals = self.sweep.inner_values
+        inner_setter = self.sweep._inner[2] if self.sweep._inner else None
 
         try:
             for oc_idx, oc_vals in self.sweep.outer_combos():
@@ -752,25 +837,28 @@ class DiodeExperiment:
                         stopped = True; break
                     print(f"  Run {self.i_run+1}/{self.Nruns}")
 
-                    for order_pos, si in enumerate(
-                            self.sweep.inner_iter(oc_idx, oc_vals)):
+                    for order_pos in range(self.sweep.inner_count):
                         if stop_check and stop_check():
                             stopped = True; break
 
-                        actual_i = int(self._inner_order[si.inner_idx])
-                        actual_val = self.sweep.inner_values[actual_i]
+                        actual_i = int(self._inner_order[order_pos])
+                        actual_val = inner_vals[actual_i]
 
-                        # Skip invalid cells → NaN
+                        # Skip invalid cells → NaN (BEFORE setter fires)
                         if (self._valid_mask is not None
                                 and not self._valid_mask[oc_idx, actual_i]):
                             self.data_array[
                                 oc_idx, self.i_run, actual_i, :] = np.nan
                             continue
 
-                        # Shuffled: manually call inner setter
-                        if (self._shuffle
-                                and self.sweep._inner[2] is not None):
-                            self.sweep._inner[2](actual_val)
+                        # # Shuffled: manually call inner setter
+                        # if (self._shuffle
+                        #         and self.sweep._inner[2] is not None):
+                        #     self.sweep._inner[2](actual_val)
+
+                        # Call inner setter only for valid cells
+                        if inner_setter is not None:
+                            inner_setter(actual_val)
 
                         self.i_scanpt = actual_i
 
@@ -836,17 +924,31 @@ class DiodeExperiment:
         batch_Nsamples = self.daq_Nsamples * n_inner
         batch_timeout = 60 * 10
 
-        # Re-create AI task for the larger batch read
+        # Re-create AI/CI task for the larger batch read
         self.ai_task._task.stop()
         self.ai_task._task.close()
-        self.ai_task = AnalogInputTask(
-            voltage_range=(-10, 10),
-            channels=concfg.input_terminals,
-            sampling_rate=cfg.daq_ai.ai_sample_rate,
-            sampling_source='',
-            start_trigger_source=concfg.start_trig_terminal,
-            samps_per_chan=int(batch_Nsamples),
-        )
+        if cfg.runtime.detector == 'counter':
+            ci = cfg.daq_ci
+            self.ai_task = CounterInputTask(
+                dev=ci.ci_counter.split('/')[0],
+                counter=[int(ci.ci_counter.split('ctr')[-1])],
+                sampling_source=(concfg.samp_clk_terminal
+                                 if not ci.ci_sample_source
+                                 else ci.ci_sample_source),
+                sampling_rate=cfg.daq_ai.ai_sample_rate,
+                sampling_mode='finite',
+                samps_per_chan=int(batch_Nsamples),
+                start_trigger_source=concfg.start_trig_terminal,
+            )
+        else:
+            self.ai_task = AnalogInputTask(
+                voltage_range=(-10, 10),
+                channels=concfg.input_terminals,
+                sampling_rate=cfg.daq_ai.ai_sample_rate,
+                sampling_source='',
+                start_trigger_source=concfg.start_trig_terminal,
+                samps_per_chan=int(batch_Nsamples),
+            )
 
         try:
             for oc_idx, oc_vals in self.sweep.outer_combos():
