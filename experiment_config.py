@@ -373,6 +373,54 @@ class UHFLIConfig:
     _raw_profile: Optional[dict] = field(default=None, repr=False)
 
 @dataclass
+class CameraConfig:
+    """Camera acquisition settings for widefield NV imaging.
+
+    Fields
+    ------
+    instr_mode : str
+        Camera trigger / experiment mode string passed to PBcontrol runners.
+        Options: 'cam_levelm', 'cam_syncm', 'cam_levelm_trigger_ao',
+                 'cam_syncm_trigger_ao_ac', 'cam_timeseries', etc.
+    exposure_s : float
+        Frame exposure time in seconds (e.g. 0.020 for 20 ms).
+    roi : list[int]
+        Camera subarray ROI as [x0, y0, width, height] in pixels.
+        Must be 4-pixel aligned for DCAM.  Empty [] = full frame.
+    frames_per_cycle : int
+        Frames captured per PB cycle.  Typically 2 (signal + reference).
+    focus_interval : int
+        Focus adjustment every N runs.  0 = never, 1 = every run.
+    min_focus_time_s : float
+        Minimum focus display time in seconds.
+    """
+    instr_mode: str = 'cam_levelm'
+    exposure_s: float = 0.020
+    roi: list = field(default_factory=lambda: [0, 0, 2048, 2048])
+    frames_per_cycle: int = 2
+    focus_interval: int = 1
+    min_focus_time_s: float = 5.0
+
+
+@dataclass
+class FieldConfig:
+    """Magnetic field alignment settings for camera experiments.
+
+    Fields
+    ------
+    align_field : list[float]
+        Static alignment field [Bx, By, Bz] in Gauss.
+    test_field : list[float]
+        Test / measurement field [Bx, By, Bz] in Gauss.
+    t_align_dc_ms : float
+        DC alignment half-period in milliseconds.
+    """
+    align_field: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    test_field: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    t_align_dc_ms: float = 200.0
+
+
+@dataclass
 class PlotConfig:
     x_units: float = GHz
     x_label: str = 'Frequency (GHz)'
@@ -446,6 +494,8 @@ class ExperimentConfig:
     daq_ao: DAQAOConfig = field(default_factory=DAQAOConfig)
     daq_ci: DAQCIConfig = field(default_factory=DAQCIConfig)
     uhfli: UHFLIConfig = field(default_factory=UHFLIConfig)
+    camera: CameraConfig = field(default_factory=CameraConfig)
+    field_cfg: FieldConfig = field(default_factory=FieldConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     save_opts: SaveConfig = field(default_factory=SaveConfig)
     runtime: RuntimeFlags = field(default_factory=RuntimeFlags)
@@ -456,7 +506,8 @@ class ExperimentConfig:
     _active_instruments: set = field(default_factory=set, repr=False)
 
     # Optional instrument fields — only serialized/printed when active.
-    _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'daq_ci', 'uhfli'}
+    _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'daq_ci', 'uhfli',
+                         'camera', 'field_cfg'}
 
     def __post_init__(self):
         """Detect which optional instruments were explicitly passed.
@@ -593,6 +644,12 @@ class ExperimentConfig:
 
         if _include('uhfli'):
             d['uhfli'] = _safe_asdict(self.uhfli)
+
+        if _include('camera'):
+            d['camera'] = _safe_asdict(self.camera)
+
+        if _include('field_cfg'):
+            d['field'] = _safe_asdict(self.field_cfg)
 
         d['plot'] = {'x_units': self.plot.x_units, 'x_label': self.plot.x_label}
         d['save'] = _safe_asdict(self.save_opts)
@@ -804,6 +861,19 @@ class ExperimentConfig:
                   f"|  osc={self.uhfli.oscillator_freq:.6g} Hz  "
                   f"|  TC={self.uhfli.timeconstant:.2g} s  "
                   f"|  order={self.uhfli.filter_order}")
+
+        if _show('camera'):
+            cam = self.camera
+            print(f"\n  CAMERA:  mode={cam.instr_mode}  "
+                  f"|  exp={cam.exposure_s*1e3:.1f} ms  "
+                  f"|  ROI={cam.roi}  "
+                  f"|  frames/cyc={cam.frames_per_cycle}")
+
+        if _show('field_cfg'):
+            fc = self.field_cfg
+            print(f"\n  FIELD:  align={fc.align_field}  "
+                  f"|  test={fc.test_field}  "
+                  f"|  t_dc={fc.t_align_dc_ms} ms")
 
         det = self.runtime.detector
         print(f"\n  RUNTIME:  Nruns={self.runtime.Nruns}  "
