@@ -56,6 +56,12 @@ config = ExperimentConfig(
             stop=1000,
             step=200,
         ),
+        # 't_AOM': ScanAxis(
+        #     name='t_AOM',
+        #     start=0.1 *ms,
+        #     stop=0.2 *ms,
+        #     step=0.1 *ms,
+        # ),
     },
 
     mw=MicrowaveConfig(power=8, freq=3.026*GHz),
@@ -73,7 +79,7 @@ config = ExperimentConfig(
     daq_ai=DAQAIConfig(ai_samps_per_chan=Nsamples),
     plot=PlotConfig(x_units=ns, x_label='Microwave pulse length (ns)'),
     save_opts=SaveConfig(prefix='Rabi'),
-    runtime=RuntimeFlags(Nruns=2, reload_pb=True),
+    runtime=RuntimeFlags(Nruns=2, reload_pb=True, seq_plot_indices=[0, 5, -1])
 ).use('mw', 'daq_ai')
 
 params_dict = config.to_dict()

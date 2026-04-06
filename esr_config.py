@@ -16,9 +16,9 @@ except ImportError:
 
 
 # ── Timing ──────────────────────────────────────────────────────────────
-t_AOM = 70 * ms
+t_AOM = 3 * ms
 t_tot = 2 * t_AOM
-Nsamples = int((t_AOM - 40*ms) / ms * 1e-3 * 10e3)
+Nsamples = int((t_AOM - 0.20*ms) / ms * 1e-3 * 10e3)
 
 # ── Channel map ─────────────────────────────────────────────────────────
 channels = {

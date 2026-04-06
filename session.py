@@ -19,6 +19,7 @@
 # =============================================================================
 
 import sys, time, importlib, traceback, subprocess
+from typing import Optional, List, Dict, Tuple
 import numpy as np
 from pathlib import Path
 from typing import Optional
@@ -27,9 +28,10 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QCheckBox, QStatusBar,
     QLineEdit, QMessageBox, QTabWidget, QTreeWidget,
-    QTreeWidgetItem, QHeaderView,
+    QTreeWidgetItem, QHeaderView, QButtonGroup, QGridLayout, QGroupBox
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QPropertyAnimation, Property, QEasingCurve
+from PySide6.QtGui import QColor, QPainter, QBrush
 import pyqtgraph as pg
 
 from SGcontrol import SignalGenerator, SignalGenerator_sim
@@ -44,7 +46,7 @@ _PAL = ['#4ec9b0', '#569cd6', '#dcdcaa', '#ce9178', '#c586c0',
 def _pen(idx, alpha=255, width=1.5, dash=False):
     c = pg.mkColor(_PAL[idx % len(_PAL)])
     c.setAlpha(alpha)
-    style = Qt.DashLine if dash else Qt.SolidLine
+    style = Qt.PenStyle.DashLine if dash else Qt.PenStyle.SolidLine
     return pg.mkPen(c, width=width, style=style)
 
 # ── clickable legend ────────────────────────────────────────────────────────
@@ -94,6 +96,106 @@ def _populate_tree(parent, data):
             else:
                 item.setText(1, str(value))
 
+class ToggleSwitch(QCheckBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(50, 28)
+        self._knob_position = 4  # starting position
+        self.animation = QPropertyAnimation(self, b"knob_position")
+        self.animation.setDuration(150)
+        self.animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.stateChanged.connect(self._start_animation)
+    
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+    
+    def _start_animation(self, state):
+        self.animation.setStartValue(self._knob_position)
+        self.animation.setEndValue(26 if state else 4)
+        self.animation.start()
+
+    def get_knob_position(self):
+        return self._knob_position
+
+    def set_knob_position(self, pos):
+        self._knob_position = pos
+        self.update()
+
+    knob_position = Property(float, get_knob_position, set_knob_position)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Track
+        track_color = QColor("#2196F3") if self.isChecked() else QColor("#CCCCCC")
+        p.setBrush(QBrush(track_color))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(0, 0, self.width(), self.height(), 14, 14)
+        
+        # Knob
+        p.setBrush(QBrush(QColor("white")))
+        p.drawEllipse(int(self._knob_position), 4, 20, 20)
+
+
+class SegmentedButton(QWidget):
+    valueChanged = Signal(int)
+    textChanged = Signal(str) # Added for parity with ComboBox
+
+    def __init__(self, options: List[str], parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        self.buttons = []
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True) # Ensures only one is checked
+        
+        for i, opt in enumerate(options):
+            btn = QPushButton(opt)
+            btn.setCheckable(True)
+            
+            # Styling logic remains the same
+            if i == 0:
+                btn.setStyleSheet("border-top-right-radius:0;border-bottom-right-radius:0;")
+            elif i == len(options) - 1:
+                btn.setStyleSheet("border-top-left-radius:0;border-bottom-left-radius:0;")
+            else:
+                btn.setStyleSheet("border-radius:0;")
+            
+            layout.addWidget(btn)
+            self.buttons.append(btn)
+            self._group.addButton(btn, i) # Assign ID as the index
+
+        self._group.idClicked.connect(self._on_id_clicked)
+        self.setValue(0)
+
+    def _on_id_clicked(self, idx: int):
+        self.valueChanged.emit(idx)
+        self.textChanged.emit(self.currentText())
+
+    def value(self) -> int:
+        return self._group.checkedId()
+
+    def setValue(self, idx: int):
+        btn = self._group.button(idx)
+        if btn:
+            btn.setChecked(True)
+            self.valueChanged.emit(idx)
+
+    def currentText(self) -> str:
+        """Mimics QComboBox.currentText()"""
+        checked_btn = self._group.checkedButton()
+        return checked_btn.text() if checked_btn else ""
+
+    def setCurrentText(self, text: str):
+        """Mimics QComboBox.setCurrentText()"""
+        for i, btn in enumerate(self.buttons):
+            if btn.text() == text:
+                self.setValue(i)
+                break
+
 # ── ExperimentThread ────────────────────────────────────────────────────────
 class ExperimentThread(QThread):
     # inner_idx, param_val, i_run, oc_idx, oc_vals_str, processed, raw
@@ -138,6 +240,9 @@ class ExperimentThread(QThread):
 # ── Session Manager ─────────────────────────────────────────────────────────
 pg.setConfigOptions(antialias=True)
 
+# QPushButton { background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 6px 12px; color: #e0e0e0; }
+# QPushButton:hover { background-color: #4d4d4d; }
+                   
 _SS = """
 QMainWindow,QWidget{background:#1e1e1e;color:#d4d4d4}
 QGroupBox{border:1px solid #3c3c3c;border-radius:4px;margin-top:8px;
@@ -147,6 +252,7 @@ QPushButton{background:#2d2d2d;border:1px solid #3c3c3c;border-radius:3px;
   padding:5px 14px}
 QPushButton:hover{background:#3c3c3c}
 QPushButton:disabled{color:#555}
+QPushButton:checked { background-color: #0078d4; }
 QComboBox,QLineEdit{background:#2d2d2d;border:1px solid #3c3c3c;
   border-radius:3px;padding:3px 6px}
 QStatusBar{background:#252526}
@@ -185,7 +291,7 @@ class SessionManager(QMainWindow):
         self._loaded_config_name = ""
 
         self._build_ui()
-        self._upd.connect(self._on_plot, Qt.QueuedConnection)
+        self._upd.connect(self._on_plot, Qt.ConnectionType.QueuedConnection)
 
     # ── UI ──────────────────────────────────────────────────────────────
 
@@ -284,21 +390,42 @@ class SessionManager(QMainWindow):
 
         mr = QHBoxLayout()
         mr.addWidget(QLabel("Mode:"))
-        self.cb_mode = QComboBox()
-        self.cb_mode.addItems(['Sweep', 'Timeseries'])
+        # self.cb_mode = QComboBox()
+        # self.cb_mode.addItems(['Sweep', 'Timeseries'])
+        self.cb_mode = SegmentedButton(['Sweep', 'Timeseries'])
         mr.addWidget(self.cb_mode)
         mr.addStretch()
         vl.addLayout(mr)
 
-        self.chk_rt = QCheckBox("Real-time plot"); self.chk_rt.setChecked(True)
-        vl.addWidget(self.chk_rt)
-        hr = QHBoxLayout()
-        self.chk_save = QCheckBox("Auto-save"); self.chk_save.setChecked(True)
-        hr.addWidget(self.chk_save)
-        hr.addWidget(QLabel("#:"))
+        # group = QGroupBox("Processing")
+        # group_layout = QGridLayout(group)
+        # self.chk_rt = ToggleSwitch()
+        # self.chk_rt.setChecked(True)
+
+        # # self.chk_rt = QCheckBox("Real-time plot"); self.chk_rt.setChecked(True)
+        # group_layout.addWidget(self.chk_rt, 0, 2)
+        # group_layout.addWidget(QLabel("Real-time plot"), 0, 1)
+        # vl.addWidget(group)
+
+        chk_rt = QHBoxLayout()
+        chk_rt.addWidget(QLabel("Real-time plot"))
+        self.chk_rt = ToggleSwitch()
+        self.chk_rt.setChecked(True)
+        
+        chk_rt.addWidget(self.chk_rt)
+        vl.addLayout(chk_rt)
+
+        chk_save = QHBoxLayout()
+        chk_save.addWidget(QLabel("Auto-save"));# chk_save.addStretch()
+        
         self.txt_f = QLineEdit("001"); self.txt_f.setMaximumWidth(50)
-        hr.addWidget(self.txt_f); hr.addStretch()
-        vl.addLayout(hr)
+        chk_save.addWidget(self.txt_f); chk_save.addStretch()
+
+        self.chk_save = ToggleSwitch(); self.chk_save.setChecked(True)
+        chk_save.addWidget(self.chk_save)
+        
+        
+        vl.addLayout(chk_save)
 
         self.btn_load_cfg = QPushButton("📋  Load Config")
         self.btn_load_cfg.setStyleSheet(
@@ -343,6 +470,21 @@ class SessionManager(QMainWindow):
         vl.addLayout(sr)
         vl.addStretch()
         return w
+    
+    # def _on_acquisition_mode_changed(self, idx: int):
+    #     """Handle display mode change (Time/FFT)"""
+    #     self.fft_mode = idx == 1
+    #     if self.fft_mode:
+    #         self.scope_dock.hide()
+    #         self.fft_dock.show()
+    #     else:
+    #         self.fft_dock.hide()
+    #         self.scope_dock.show()
+    #     if self.display_mgr:
+    #         self.display_mgr.set_fft_enabled(self.fft_mode)
+    #     # Enable/disable FFT controls
+    #     self.fft_tab.set_fft_mode_enabled(self.fft_mode)
+    #     self.error_label.set_msg(f"Display mode: {'FFT' if self.fft_mode else 'Time'}", error=False)
 
     def _build_metadata_tab(self):
         w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(4,4,4,4)
@@ -351,8 +493,8 @@ class SessionManager(QMainWindow):
         self._meta_tree.setHeaderLabels(["Parameter","Value"])
         self._meta_tree.setAlternatingRowColors(True)
         self._meta_tree.setRootIsDecorated(True)
-        self._meta_tree.header().setSectionResizeMode(0,QHeaderView.ResizeToContents)
-        self._meta_tree.header().setSectionResizeMode(1,QHeaderView.Stretch)
+        self._meta_tree.header().setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
+        self._meta_tree.header().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
         vl.addWidget(self._meta_tree)
         return w
 
@@ -829,8 +971,8 @@ class SessionManager(QMainWindow):
         if self.is_running:
             r = QMessageBox.question(self, "Running",
                                      "Stop and quit?",
-                                     QMessageBox.Yes | QMessageBox.No)
-            if r == QMessageBox.No: ev.ignore(); return
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if r == QMessageBox.StandardButton.No: ev.ignore(); return
             # Stop whatever is running
             if hasattr(self, '_ts_exp') and self._ts_exp and self._ts_exp.is_running:
                 self._ts_stop()
