@@ -11,11 +11,11 @@
 #       * Per-outer-combo separate color group
 #       * Shuffled x-axis: pre-allocated from param values, scatter as data arrives
 #       * Click legend to show/hide traces
-#   - Default autosave ON, per-run overwrite (crash-safe)
 #   - View Sequence: matplotlib popup (needs PB only)
 #   - Play Sequence: program + start PB at last scan point (needs PB only)
 #   - RUN: experiment in QThread with real-time pyqtgraph
 #   - Save: Saved_Data/YYYY-MM-DD/meas_NNN/ with data + metadata
+#   - Default autosave ON, per-run overwrite (crash-safe)
 # =============================================================================
 
 import sys, time, importlib, traceback, subprocess
@@ -39,7 +39,15 @@ from PBcontrol import PulseBlaster
 from DAQcontrol import AnalogOutputTask
 import connectionConfig as concfg
 
-# ── palette ─────────────────────────────────────────────────────────────────
+# ── IPython in-process console (optional — degrades gracefully) ──────
+try:
+    from qtconsole.rich_ipython_widget import RichIPythonWidget
+    from qtconsole.inprocess import QtInProcessKernelManager
+    _HAS_QTCONSOLE = True
+except ImportError:
+    _HAS_QTCONSOLE = False
+
+# ── palette ──────────────────────────────────────────────────────────────
 _PAL = ['#4ec9b0', '#569cd6', '#dcdcaa', '#ce9178', '#c586c0',
         '#9cdcfe', '#d7ba7d', '#b5cea8', '#f44747', '#6a9955']
 
@@ -276,7 +284,6 @@ class SessionManager(QMainWindow):
         self.setStyleSheet(_SS)
 
         self.sg = None; self.pb = None; self.ao_task = None
-        self.camera_worker = None
         self.instruments_connected = False
         self._pb_ready = False
 
@@ -289,6 +296,11 @@ class SessionManager(QMainWindow):
 
         self._loaded_config = None
         self._loaded_config_name = ""
+        self._ipy_kernel = None
+        self._ipy_widget = None
+        self._camera_viewer = None       # In-process CameraViewerV2 window
+        self._hci_process = None          # subprocess.Popen for HCImageLive
+        self._hci_watcher = None          # QTimer polling HCImageLive exit
 
         self._build_ui()
         self._upd.connect(self._on_plot, Qt.ConnectionType.QueuedConnection)
@@ -305,6 +317,7 @@ class SessionManager(QMainWindow):
         self._tabs.addTab(self._build_instruments_tab(), "Instruments")
         self._tabs.addTab(self._build_experiment_tab(), "Experiment")
         self._tabs.addTab(self._build_metadata_tab(), "Config")
+        self._tabs.addTab(self._build_console_tab(), "Console")
         root.addWidget(self._tabs)
 
         # Right: plots
@@ -373,6 +386,24 @@ class SessionManager(QMainWindow):
         tr.addWidget(self.btn_launch_pb_gui)
         vl.addLayout(tr)
 
+        # ── Camera tools ────────────────────────────────────────────────
+        lbl2 = QLabel("Camera:")
+        lbl2.setStyleSheet("color:#888;font-size:11px")
+        vl.addWidget(lbl2)
+        cr = QHBoxLayout()
+        self.btn_launch_cam = QPushButton("📷 Camera Viewer")
+        self.btn_launch_cam.setToolTip(
+            "Open Camera Viewer v2 (in-process, returns settings)")
+        self.btn_launch_cam.clicked.connect(self._launch_camera_viewer)
+        cr.addWidget(self.btn_launch_cam)
+        self.btn_launch_hci = QPushButton("🎥 HCImageLive")
+        self.btn_launch_hci.setToolTip(
+            "Launch HCImageLive.exe for high-speed streaming\n"
+            "(disconnects camera first, reconnects on close)")
+        self.btn_launch_hci.clicked.connect(self._launch_hcimagelive)
+        cr.addWidget(self.btn_launch_hci)
+        vl.addLayout(cr)
+
         vl.addStretch()
         return w
 
@@ -381,7 +412,8 @@ class SessionManager(QMainWindow):
         vl.addWidget(QLabel("Config module:"))
         self.cb_cfg = QComboBox(); self.cb_cfg.setEditable(True)
         self.cb_cfg.addItems(['esr_config','rabi_config','echo_config',
-                              't1_config','t2_config','ramsey_config'])
+                              't1_config','t2_config','ramsey_config',
+                              'camera_esr_config'])
         vl.addWidget(self.cb_cfg)
         vl.addWidget(QLabel("Script:"))
         self.cb_scr = QComboBox(); self.cb_scr.setEditable(True)
@@ -508,6 +540,120 @@ class SessionManager(QMainWindow):
                             ["Error", str(e)])
 
     # ════════════════════════════════════════════════════════════════
+    #  IPython CONSOLE TAB
+    # ════════════════════════════════════════════════════════════════
+
+    def _build_console_tab(self):
+        w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(2, 2, 2, 2)
+        self._ipy_widget = None
+        self._ipy_kernel = None
+
+        if not _HAS_QTCONSOLE:
+            lbl = QLabel("qtconsole not installed.\n"
+                         "pip install qtconsole ipykernel")
+            lbl.setStyleSheet("color:#888;padding:20px")
+            lbl.setAlignment(Qt.AlignCenter)
+            vl.addWidget(lbl)
+            return w
+
+        try:
+            # Kernel (in-process — shares GIL + memory with session)
+            km = QtInProcessKernelManager()
+            km.start_kernel()
+            kc = km.client()
+            kc.start_channels()
+            self._ipy_kernel = km
+
+            # Console widget
+            cw = RichIPythonWidget()
+            cw.kernel_manager = km
+            cw.kernel_client = kc
+            cw.syntax_style = 'monokai'
+            cw.setStyleSheet("""
+                QPlainTextEdit, QTextEdit {
+                    background-color: #1e1e1e;
+                    color: #d4d4d4;
+                    selection-background-color: #264f78;
+                    selection-color: #ffffff;
+                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                    font-size: 11pt;
+                    border: none;
+                }
+            """)
+
+            self._ipy_widget = cw
+            vl.addWidget(cw)
+
+            # Push initial namespace (instruments not yet connected)
+            self._push_namespace(banner=True)
+
+        except Exception as e:
+            lbl = QLabel(f"Console init failed:\n{e}")
+            lbl.setStyleSheet("color:#f44;padding:20px")
+            lbl.setWordWrap(True)
+            vl.addWidget(lbl)
+
+        return w
+
+    def _push_namespace(self, banner: bool = False):
+        """Push session state into the IPython kernel namespace.
+
+        Called:
+          - Once at console creation (with banner=True)
+          - After each sweep experiment completes (_on_done)
+          - After each timeseries stops (_ts_stop)
+          - After instrument init
+
+        The user always sees the latest state via the pushed references.
+        """
+        if self._ipy_kernel is None:
+            return
+
+        ns = {
+            'session': self,
+            'np': np,
+            'sg': self.sg,
+            'pb': self.pb,
+            'ao_task': self.ao_task,
+            'cfg': self._loaded_config,
+            'exp': self.last_exp,
+            'data': (self.last_exp.data_array
+                     if self.last_exp is not None else None),
+        }
+
+        # Timeseries experiment if available
+        if hasattr(self, '_ts_exp') and self._ts_exp is not None:
+            ns['ts_exp'] = self._ts_exp
+
+        # Camera viewer if available
+        if self._camera_viewer is not None:
+            ns['cam_viewer'] = self._camera_viewer
+            ns['cam_settings'] = self._get_camera_viewer_settings()
+
+        self._ipy_kernel.kernel.shell.push(ns)
+
+        if banner:
+            self._ipy_widget.execute(
+                'print("\\033[96m" + "─"*44 + "\\033[0m")\n'
+                'print("\\033[96m  NV Session Console\\033[0m")\n'
+                'print("\\033[96m" + "─"*44 + "\\033[0m")\n'
+                'print("\\033[93mNamespace:\\033[0m")\n'
+                'print("  session  — SessionManager (this window)")\n'
+                'print("  sg, pb, ao_task — instrument handles")\n'
+                'print("  cfg      — loaded ExperimentConfig")\n'
+                'print("  exp      — last DiodeExperiment")\n'
+                'print("  data     — last exp.data_array")\n'
+                'print("  ts_exp   — last TimeseriesExperiment")\n'
+                'print("  cam_viewer — Camera Viewer window (if open)")\n'
+                'print("  cam_settings — dict from cam_viewer (exposure, ROI…)")\n'
+                'print("  np       — numpy")\n'
+                'print()\n'
+                'print("\\033[90mNamespace refreshed after each run.\\033[0m")\n'
+                'print("\\033[90mAvoid heavy computation during acquisition.\\033[0m")\n',
+                hidden=True,
+            )
+
+    # ════════════════════════════════════════════════════════════════
     #  INSTRUMENTS
     # ════════════════════════════════════════════════════════════════
 
@@ -612,6 +758,171 @@ class SessionManager(QMainWindow):
             self.lbl_st.setText(f"❌ Launch {script_name}: {e}")
 
     # ════════════════════════════════════════════════════════════════
+    #  CAMERA VIEWER (in-process — can read back settings)
+    # ════════════════════════════════════════════════════════════════
+
+    def _launch_camera_viewer(self):
+        """Open Camera Viewer v2 as an in-process window.
+
+        In-process means:
+        - Shares the Qt event loop and GIL with session
+        - Session can read back exposure/ROI when viewer closes
+        - Camera object is owned by viewer, not session
+        - Viewer window is independent (not docked)
+        """
+        # If already open, just raise it
+        if self._camera_viewer is not None:
+            try:
+                if self._camera_viewer.isVisible():
+                    self._camera_viewer.raise_()
+                    self._camera_viewer.activateWindow()
+                    self.lbl_st.setText("Camera Viewer already open")
+                    return
+            except RuntimeError:
+                # C++ object deleted
+                self._camera_viewer = None
+
+        try:
+            from cam_v2_main import CameraViewerV2
+            self._camera_viewer = CameraViewerV2()
+            self._camera_viewer.setWindowTitle("Camera Viewer v2 — Session")
+            self._camera_viewer.setAttribute(
+                Qt.WidgetAttribute.WA_DeleteOnClose, False)
+            self._camera_viewer.show()
+            self.lbl_cam.setText("Cam: ● viewer open")
+            self.lbl_st.setText("✔ Camera Viewer opened")
+
+            # Push to console namespace
+            if self._ipy_kernel is not None:
+                self._ipy_kernel.kernel.shell.push({
+                    'cam_viewer': self._camera_viewer})
+
+        except Exception as e:
+            self.lbl_st.setText(f"❌ Camera Viewer: {e}")
+            print(traceback.format_exc())
+
+    def _get_camera_viewer_settings(self) -> dict:
+        """Read back camera settings from viewer (if open).
+
+        Returns dict with exposure_ms, roi, camera_type etc.
+        Useful for setting up experiment after visual inspection.
+        """
+        if self._camera_viewer is None:
+            return {}
+        try:
+            v = self._camera_viewer
+            settings = {
+                'exposure_ms': v.camera_config.exposure_ms,
+                'gain': v.camera_config.gain,
+                'binning': v.camera_config.binning,
+                'camera_type': v.camera_config.camera_type.value,
+                'roi': v.camera_config.roi,
+                'trigger_mode': v.camera_config.trigger_mode.value,
+            }
+            # Read actual exposure from camera if connected
+            if v.camera is not None and v.camera.is_open:
+                settings['actual_exposure_ms'] = v.camera.get_exposure()
+                settings['actual_roi'] = v.camera.get_roi()
+            return settings
+        except Exception:
+            return {}
+
+    # ════════════════════════════════════════════════════════════════
+    #  HCIMAGELIVE LAUNCHER (subprocess — high-speed streaming)
+    # ════════════════════════════════════════════════════════════════
+
+    # Common install paths for HCImageLive
+    _HCIMAGELIVE_PATHS = [
+        r"C:\Program Files\Hamamatsu\HCImageLive\HCImageLive.exe",
+        r"C:\Program Files (x86)\Hamamatsu\HCImageLive\HCImageLive.exe",
+        r"C:\Program Files\Hamamatsu\HCImage\HCImageLive.exe",
+    ]
+
+    def _find_hcimagelive(self) -> Optional[str]:
+        """Find HCImageLive.exe on the system."""
+        import shutil
+        for p in self._HCIMAGELIVE_PATHS:
+            if Path(p).exists():
+                return p
+        found = shutil.which("HCImageLive")
+        return found
+
+    def _launch_hcimagelive(self):
+        """Launch HCImageLive.exe for high-speed streaming.
+
+        Workflow:
+        1. Disconnect camera from viewer (DCAM allows only one owner)
+        2. Launch HCImageLive as subprocess
+        3. Poll for exit — reconnect camera viewer on close
+
+        Camera settings (exposure, ROI) set via DCAM properties persist
+        on the hardware, so HCImageLive inherits them.
+        """
+        # Check if already running
+        if self._hci_process is not None and self._hci_process.poll() is None:
+            self.lbl_st.setText("HCImageLive already running")
+            return
+
+        # Find executable
+        exe = self._find_hcimagelive()
+        if exe is None:
+            self.lbl_st.setText("❌ HCImageLive.exe not found")
+            QMessageBox.warning(
+                self, "HCImageLive",
+                "Could not find HCImageLive.exe.\n\n"
+                "Searched:\n" +
+                "\n".join(f"  • {p}" for p in self._HCIMAGELIVE_PATHS) +
+                "\n\nInstall from Hamamatsu or add to PATH.")
+            return
+
+        # Disconnect camera from viewer (DCAM exclusive access)
+        if self._camera_viewer is not None:
+            try:
+                self._camera_viewer._disconnect_camera()
+                self.lbl_st.setText("Camera released for HCImageLive...")
+                QApplication.processEvents()
+                time.sleep(0.3)  # Brief pause for DCAM cleanup
+            except Exception as e:
+                print(f"Camera disconnect warning: {e}")
+
+        # Launch
+        try:
+            self._hci_process = subprocess.Popen([exe])
+            self.lbl_cam.setText("Cam: ● HCImageLive")
+            self.lbl_st.setText(
+                f"✔ HCImageLive launched (PID {self._hci_process.pid})")
+            self.btn_launch_hci.setText("🎥 HCI running...")
+            self.btn_launch_hci.setEnabled(False)
+
+            # Start polling for exit
+            self._hci_watcher = QTimer(self)
+            self._hci_watcher.timeout.connect(self._poll_hcimagelive)
+            self._hci_watcher.start(1000)  # Check every second
+
+        except Exception as e:
+            self.lbl_st.setText(f"❌ HCImageLive: {e}")
+            print(traceback.format_exc())
+
+    def _poll_hcimagelive(self):
+        """Poll HCImageLive process — reconnect camera when it exits."""
+        if self._hci_process is None or self._hci_process.poll() is not None:
+            # Process has exited
+            if self._hci_watcher is not None:
+                self._hci_watcher.stop()
+                self._hci_watcher = None
+
+            self._hci_process = None
+            self.btn_launch_hci.setText("🎥 HCImageLive")
+            self.btn_launch_hci.setEnabled(True)
+            self.lbl_cam.setText("Cam: ○ HCI closed")
+            self.lbl_st.setText("HCImageLive closed — camera available")
+
+            # Offer to reconnect camera in viewer
+            if self._camera_viewer is not None and self._camera_viewer.isVisible():
+                self.lbl_st.setText(
+                    "HCImageLive closed — reconnect via Camera menu in viewer")
+
+    # ════════════════════════════════════════════════════════════════
     #  LOAD CONFIG
     # ════════════════════════════════════════════════════════════════
 
@@ -627,6 +938,7 @@ class SessionManager(QMainWindow):
         self._loaded_config_name = cn
         self._update_metadata_tree(cm.config)
         self._tabs.setCurrentIndex(2)
+        self._push_namespace()
         self.lbl_st.setText(f"✔ Loaded {cn}")
 
     def _ensure_config(self):
@@ -659,33 +971,43 @@ class SessionManager(QMainWindow):
         # Get the ExperimentConfig object from config module
         if not hasattr(cm, 'config'):
             self.lbl_st.setText(f"❌ {cn} has no 'config' attribute"); return
+        
         exp_config = cm.config
         self._loaded_config = exp_config
         self._loaded_config_name = cn
         self._update_metadata_tree(exp_config)
 
+        # Detect camera experiment
+        is_camera = self._is_camera_config(exp_config)
+
+        # Build instruments dict
         instr = {'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task}
+        
+        if is_camera:
+            cw = self._get_or_create_camera_worker(exp_config)
+            if cw is None:
+                return
+            instr['camera_worker'] = cw
 
         sp = fn = None
         if self.chk_save.isChecked():
+            fn = self.txt_f.text().strip() or "001"
             dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
             dd.mkdir(parents=True, exist_ok=True)
-            fn = self.txt_f.text().strip() or "001"
             sp = dd / f"meas_{fn}"; sp.mkdir(exist_ok=True)
 
-        # Clear plots
-        self.sweep_plot.clear()
-        self.sweep_plot.addLegend(offset=(10, 10))
-        self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1), clear=True)
-        self._curves.clear()
+        # Switch plot layout based on experiment type
+        if is_camera:
+            self._setup_camera_plots(exp_config)
+        else:
+            self._setup_diode_plots(exp_config)
 
-        # Store config ref for plotting — use ExperimentConfig directly
         self._exp_config = exp_config
         primary_name = exp_config.scan_names[0]
         self._inner_vals = exp_config.scans[primary_name].values
         self._xu = exp_config.plot.x_units
         self._Nruns = exp_config.runtime.Nruns
-        self.sweep_plot.setLabel('bottom', exp_config.plot.x_label)
+        self._is_camera_run = is_camera
 
         # Thread
         self.experiment_thread = ExperimentThread(
@@ -814,6 +1136,7 @@ class SessionManager(QMainWindow):
         self.btn_run.setEnabled(True); self.btn_stop.setEnabled(False)
         self.btn_init.setEnabled(True); self._update_seq_btns()
         self.lbl_st.setText("✔ Timeseries done")
+        self._push_namespace()
 
     # ════════════════════════════════════════════════════════════════
     #  VIEW SEQUENCE (PB only)
@@ -880,6 +1203,11 @@ class SessionManager(QMainWindow):
 
     @Slot(int, float, int, int, str, object, object)
     def _on_plot(self, inner_idx, val, i_run, oc_idx, oc_str, proc, raw):
+        if getattr(self, '_is_camera_run', False):
+            self._on_camera_plot(inner_idx, val, i_run, oc_idx, oc_str,
+                                 proc, raw)
+            return
+
         self.lbl_st.setText(
             f"Outer {oc_idx+1}  Run {i_run+1}/{self._Nruns}  "
             f"Pt {inner_idx+1}/{len(self._inner_vals)}"
@@ -949,6 +1277,11 @@ class SessionManager(QMainWindow):
         sh = " × ".join(str(s) for s in data.shape)
         self.lbl_st.setText(f"✔ Done — data {sh}")
 
+        # Restore diode plot layout if camera was used
+        if getattr(self, '_is_camera_run', False):
+            self._is_camera_run = False
+        self._push_namespace()
+
     @Slot(str)
     def _on_err(self, tb):
         self.is_running = False
@@ -957,6 +1290,8 @@ class SessionManager(QMainWindow):
         self._update_seq_btns()
         self.lbl_st.setText("❌ Error (see console)")
         print(tb)
+        if getattr(self, '_is_camera_run', False):
+            self._is_camera_run = False
 
     def _stop_experiment(self):
         if self.cb_mode.currentText() == 'Timeseries':
@@ -965,7 +1300,212 @@ class SessionManager(QMainWindow):
             self.experiment_thread.request_stop()
             self.lbl_st.setText("⏹ Stopping…")
 
-    # ── cleanup ─────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════
+    #  CAMERA EXPERIMENT — plot layout + callback + helpers
+    # ════════════════════════════════════════════════════════════════
+
+    def _is_camera_config(self, config) -> bool:
+        """Detect if config is for a camera experiment."""
+        return (hasattr(config, 'camera')
+                and config._is_active('camera'))
+
+    def _get_or_create_camera_worker(self, config):
+        """Get or create a CameraWorker for camera experiments.
+
+        Reads settings from camera viewer if open, otherwise creates
+        a fresh CameraWorker with settings from config.
+        """
+        # If camera viewer is open, close it first (DCAM exclusive access)
+        if self._camera_viewer is not None:
+            try:
+                if self._camera_viewer.isVisible():
+                    # Read back settings before closing
+                    viewer_settings = self._get_camera_viewer_settings()
+                    if viewer_settings:
+                        # Apply viewer settings to config if different
+                        if 'actual_exposure_ms' in viewer_settings:
+                            config.camera.exposure_s = (
+                                viewer_settings['actual_exposure_ms'] / 1e3)
+                        if 'actual_roi' in viewer_settings:
+                            config.camera.roi = list(
+                                viewer_settings['actual_roi'])
+                    self._camera_viewer._disconnect_camera()
+                    self._camera_viewer.close()
+                    self.lbl_cam.setText("Cam: ○ closed for experiment")
+                    QApplication.processEvents()
+                    time.sleep(0.5)  # DCAM cleanup
+            except Exception as e:
+                print(f"⚠ Viewer close: {e}")
+            self._camera_viewer = None
+
+        # Check if we already have a camera worker from a previous run
+        if hasattr(self, '_camera_worker') and self._camera_worker is not None:
+            try:
+                self._camera_worker.query_camera_status()
+                self.lbl_cam.setText("Cam: ● reusing worker")
+                return self._camera_worker
+            except Exception:
+                self._camera_worker = None
+
+        # Create new CameraWorker
+        try:
+            from Camcontrol import CameraWorker
+            cw = CameraWorker(
+                simulate=self.chk_sim.isChecked(),
+                roi=config.camera.roi,
+                exposure=config.camera.exposure_s,
+            )
+            cw.init_cam()
+            self._camera_worker = cw
+            self.lbl_cam.setText(f"Cam: ● {cw.device_title}")
+            self.lbl_st.setText("✔ Camera initialized")
+            return cw
+        except Exception as e:
+            self.lbl_st.setText(f"❌ Camera init: {e}")
+            print(traceback.format_exc())
+            return None
+
+    def _setup_camera_plots(self, config):
+        """Switch plot area to 3-panel camera layout.
+
+        Layout:
+            Top:    Image panel (pg.ImageView with signal frame)
+            Bottom: Intensity (sig+ref) | Contrast (S/R)
+        """
+        # Get the right-side plot container
+        pw = self.sweep_plot.parent()
+        layout = pw.layout()
+
+        # Remove existing diode plots
+        layout.removeWidget(self.sweep_plot)
+        layout.removeWidget(self.raw_plot)
+        self.sweep_plot.hide()
+        self.raw_plot.hide()
+
+        # ── Image panel ──────────────────────────────────────────
+        self._cam_plot = pg.PlotWidget(title="Camera Frame")
+        self._cam_plot.setAspectLocked(True)
+        self._cam_plot.invertY(True)
+        self._cam_plot.hideAxis('bottom')
+        self._cam_plot.hideAxis('left')
+        self._cam_image = pg.ImageItem()
+        self._cam_plot.addItem(self._cam_image)
+
+        # ROI overlay (yellow rectangle matching camera subarray)
+        roi = config.camera.roi
+        if roi and len(roi) == 4 and roi != [0, 0, 2048, 2048]:
+            roi_rect = pg.RectROI(
+                [0, 0], [roi[2], roi[3]],
+                pen=pg.mkPen('#dcdcaa', width=2),
+                movable=False, removable=False)
+            roi_rect.removeHandle(0)  # non-interactive
+            self._cam_plot.addItem(roi_rect)
+            self._cam_roi_rect = roi_rect
+        else:
+            self._cam_roi_rect = None
+
+        # Colorbar
+        self._cam_cbar = pg.ColorBarItem(
+            colorMap=pg.colormap.get('inferno'),
+            interactive=False, width=15)
+        self._cam_cbar.setImageItem(self._cam_image)
+
+        layout.addWidget(self._cam_plot, stretch=2)
+
+        # ── Bottom row: Intensity + Contrast ─────────────────────
+        bottom_w = QWidget()
+        bottom_l = QHBoxLayout(bottom_w)
+        bottom_l.setContentsMargins(0, 0, 0, 0)
+
+        self._intensity_plot = pg.PlotWidget(title="Intensity")
+        self._intensity_plot.addLegend(offset=(10, 10))
+        self._intensity_plot.setLabel('bottom', config.plot.x_label)
+        self._intensity_plot.setLabel('left', 'Pixel sum')
+        self._intensity_plot.showGrid(x=True, y=True, alpha=0.3)
+        self._intensity_sig = self._intensity_plot.plot(
+            pen=_pen(0, 220, 1.5), name='Sig')
+        self._intensity_ref = self._intensity_plot.plot(
+            pen=_pen(1, 220, 1.5, dash=True), name='Ref')
+        bottom_l.addWidget(self._intensity_plot)
+
+        self._contrast_plot = pg.PlotWidget(title="Contrast")
+        self._contrast_plot.setLabel('bottom', config.plot.x_label)
+        self._contrast_plot.setLabel('left', 'S / R')
+        self._contrast_plot.showGrid(x=True, y=True, alpha=0.3)
+        self._contrast_curve = self._contrast_plot.plot(
+            pen=_pen(2, 220, 1.5), name='S/R')
+        bottom_l.addWidget(self._contrast_plot)
+
+        layout.addWidget(bottom_w, stretch=1)
+        self._cam_bottom_widget = bottom_w
+
+    def _setup_diode_plots(self, config):
+        """Restore standard diode 2-panel layout (sweep + raw trace)."""
+        pw = self.sweep_plot.parent()
+        layout = pw.layout()
+
+        # Remove camera panels if present
+        for attr in ('_cam_plot', '_cam_bottom_widget'):
+            w = getattr(self, attr, None)
+            if w is not None:
+                layout.removeWidget(w)
+                w.setParent(None)
+                w.deleteLater()
+                setattr(self, attr, None)
+
+        # Show diode plots
+        self.sweep_plot.show()
+        self.raw_plot.show()
+        if layout.indexOf(self.sweep_plot) < 0:
+            layout.addWidget(self.sweep_plot, stretch=2)
+        if layout.indexOf(self.raw_plot) < 0:
+            layout.addWidget(self.raw_plot, stretch=1)
+
+        # Reset
+        self.sweep_plot.clear()
+        self.sweep_plot.addLegend(offset=(10, 10))
+        self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1), clear=True)
+        self._curves.clear()
+        self.sweep_plot.setLabel('bottom', config.plot.x_label)
+
+    def _on_camera_plot(self, inner_idx, val, i_run, oc_idx, oc_str,
+                        processed, frame):
+        """Handle camera experiment callback — update 3 panels.
+
+        Convention from CameraExperiment:
+            inner_idx == -1  → focus frame (processed=None)
+            inner_idx >= 0   → acquisition point
+        """
+        is_focus = (inner_idx < 0)
+
+        if is_focus:
+            self.lbl_st.setText(
+                f"🔍 Focus  Run {i_run+1}/{self._Nruns}  "
+                f"{'  '+oc_str if oc_str else ''}")
+        else:
+            self.lbl_st.setText(
+                f"Outer {oc_idx+1}  Run {i_run+1}/{self._Nruns}  "
+                f"Pt {inner_idx+1}/{len(self._inner_vals)}"
+                f"{'  '+oc_str if oc_str else ''}")
+
+        if not self.chk_rt.isChecked():
+            return
+
+        # Image panel — update for both focus and acquisition
+        if frame is not None and hasattr(self, '_cam_image'):
+            # pyqtgraph ImageItem wants (width, height) = frame.T
+            self._cam_image.setImage(frame.T, autoLevels=True)
+
+        # Intensity + Contrast panels — only during acquisition
+        if not is_focus and processed is not None:
+            mean_sig, mean_ref, contrast = processed
+            n = len(mean_sig)
+            xs = self._inner_vals[:n] / self._xu
+            if hasattr(self, '_intensity_sig'):
+                self._intensity_sig.setData(xs, mean_sig)
+                self._intensity_ref.setData(xs, mean_ref)
+            if hasattr(self, '_contrast_curve'):
+                self._contrast_curve.setData(xs, contrast)
 
     def closeEvent(self, ev):
         if self.is_running:
@@ -980,6 +1520,29 @@ class SessionManager(QMainWindow):
                 self.experiment_thread.request_stop()
                 self.experiment_thread.wait(3000)
         try:
+            # Close camera viewer
+            if self._camera_viewer is not None:
+                try:
+                    self._camera_viewer.close()
+                except Exception:
+                    pass
+                self._camera_viewer = None
+
+            # Uninit camera worker if owned by session
+            if hasattr(self, '_camera_worker') and self._camera_worker is not None:
+                try:
+                    self._camera_worker.uninit_cam()
+                except Exception:
+                    pass
+                self._camera_worker = None
+
+            # Terminate HCImageLive if running
+            if self._hci_process is not None and self._hci_process.poll() is None:
+                self._hci_process.terminate()
+                self._hci_process = None
+            if self._hci_watcher is not None:
+                self._hci_watcher.stop()
+
             if self.ao_task:
                 self.ao_task.set_outputs_to_constant([0, 0, 0])
                 time.sleep(0.2); self.ao_task.__del__()
@@ -988,6 +1551,12 @@ class SessionManager(QMainWindow):
                 try: self.pb.stop_sequence()
                 except: pass
                 self.pb.closePB()
+            # Shutdown IPython kernel
+            if self._ipy_kernel is not None:
+                try:
+                    self._ipy_kernel.shutdown_kernel()
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Cleanup: {e}")
         ev.accept()

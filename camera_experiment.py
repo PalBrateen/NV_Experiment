@@ -314,6 +314,13 @@ class CameraExperiment:
         buffer_size = self.Nframes + 2  # a few extra for safety
         cw.start_capture(buffer_size=buffer_size, prep_only=True)
 
+        # 10. Prepare AO pattern for trigger_ao modes
+        self._ao_pattern = None
+        if 'trigger_ao' in self.instr_mode and self.ao_task is not None:
+            self._ao_pattern = self._prepare_ao_pattern()
+            if self._ao_pattern is not None:
+                print(f"▶ AO pattern: {self._ao_pattern.shape}")
+
         print(f"▶ Camera: {self.instr_mode}  "
               f"exp={self.exposure*1e3:.1f}ms  "
               f"ROI={self.roi}  "
@@ -379,6 +386,46 @@ class CameraExperiment:
                         t += inst[3]
                 pair.append(t)
             self._t_seq_total_pairs.append(pair)
+
+    def _prepare_ao_pattern(self):
+        """Build the AO voltage pattern for trigger_ao rotating field modes.
+
+        Uses FieldConfig align_field and t_align_dc_ms to create the
+        retriggerable AO waveform that the DAQ outputs synchronously with PB.
+
+        Returns ndarray (3, n_samples) or None if not applicable.
+        """
+        cfg = self.cfg
+        field_cfg = cfg.field_cfg
+        align_field = np.array(field_cfg.align_field, dtype=float)
+
+        if np.allclose(align_field, 0):
+            print("  ℹ AO pattern: align_field is zero — skipping")
+            return None
+
+        try:
+            from DAQcontrol import AnalogOutputTask
+            # Build a simple DC alignment pattern
+            # The pattern length is determined by the alignment time
+            samp_rate = 10e3  # default AO sample rate
+            t_align_s = field_cfg.t_align_dc_ms / 1e3
+            n_samples = max(int(samp_rate * t_align_s), 10)
+
+            # Simple pattern: field ON for half, OFF for half
+            pattern = np.zeros((3, n_samples))
+            half = n_samples // 2
+            # First half: Bz + MW
+            pattern[:, :half] = (align_field / self.ao_task.vi_calibration
+                                 ).reshape(3, 1)
+            # Second half: Bx + By
+            # (simplified — the full rotating pattern is experiment-specific)
+            pattern[:, half:] = (align_field / self.ao_task.vi_calibration
+                                 ).reshape(3, 1)
+
+            return AnalogOutputTask.prepare_data_for_write(pattern)
+        except Exception as e:
+            print(f"⚠ AO pattern prep: {e}")
+            return None
 
     def _build_sweep(self, cfg):
         """Add inner + outer axes to self.sweep."""
@@ -455,6 +502,18 @@ class CameraExperiment:
                         self._focus_adjust(
                             self.i_run,
                             callback=callback)
+
+                    # Start retriggerable AO for trigger_ao modes
+                    if (self._ao_pattern is not None
+                            and 'trigger_ao' in self.instr_mode
+                            and self.ao_task is not None):
+                        try:
+                            self.ao_task.create_retriggerable_ao_task(
+                                self._ao_pattern.shape)
+                            self.ao_task.start_retriggerable_ao_task(
+                                self._ao_pattern)
+                        except Exception as e:
+                            print(f"⚠ AO retrig start: {e}")
 
                     # Create synchronization primitives
                     trigger_event = threading.Event()
@@ -580,6 +639,16 @@ class CameraExperiment:
             t_align_ns = self.t_align_dc_ms * 1e6
             self.pb.custom_trigger(t_exp_ns, t_align_ns)
 
+        elif self.instr_mode == 'cam_timeseries_trigger_ao':
+            t_align_ns = self.t_align_dc_ms * 1e6
+            # custom_trigger_rot_field expects:
+            #   t_exposure, t_align_rot, t_measurement, t_align_rot_extended
+            # For Phase 2: use config.extra for t_meas and extended alignment
+            t_meas_ns = self.cfg.extra.get('t_meas_ns', 50e6)  # 50 ms default
+            t_align_ext_ns = self.cfg.extra.get('t_align_extended_ns', t_align_ns)
+            self.pb.custom_trigger_rot_field(
+                t_exp_ns, t_align_ns, t_meas_ns, t_align_ext_ns)
+
         else:
             raise ValueError(f"Unknown camera mode: {self.instr_mode}")
 
@@ -599,9 +668,7 @@ class CameraExperiment:
         # Last signal frame at current scan point
         last_frame = self.data_array[oc_idx, i_run, actual_i, 0, :, :]
 
-        oc_str = ("  ".join(f"{k}={v:.4g}" for k, v in oc_vals.items())
-                  if oc_vals else "")
-        callback(actual_i, actual_val, i_run, oc_idx, oc_str,
+        callback(actual_i, actual_val, i_run, oc_idx, oc_vals,
                  processed, last_frame)
 
     # ══════════════════════════════════════════════════════════════════
@@ -644,7 +711,7 @@ class CameraExperiment:
                     if frame is not False and callback is not None:
                         # Send frame through callback for display
                         # Convention: when processed=None, frame is focus frame
-                        callback(-1, 0.0, i_run, self.i_outer, "",
+                        callback(-1, 0.0, i_run, self.i_outer, {},
                                  None, frame)
 
             self.pb.stop_sequence()
