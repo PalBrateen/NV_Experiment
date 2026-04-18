@@ -19,7 +19,10 @@ import logging, numpy as np, cv2, sys, time, matplotlib.pyplot as plt, dcamcon, 
 from screeninfo import get_monitors
 from PBcontrol import PulseBlaster, ns, ms, us, Inst
 from DAQcontrol import AnalogOutputTask
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QDoubleSpinBox, QLCDNumber
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QDoubleSpinBox, QLCDNumber
+)
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, pyqtSlot, QThread
 from PyQt5.QtGui import QPalette
 from typing import Optional, Union, List, Tuple
@@ -632,6 +635,7 @@ class CameraWorker(QObject):
             print(f"Error: in Camcontrol.py > CamWorker.configure_camera(): {e}")
 
     def query_cam_settings(self):
+        """Print current camera trigger settings."""
         try:
             self.trigger_mode = self.hdcamcon.get_propertyvalue(
                 propid=dcamcon.DCAM_IDPROP.TRIGGER_MODE
@@ -864,52 +868,52 @@ class CameraThread(QThread):
         self.wait()
         QApplication.quit()
 
-# def initial_live_frames(ao_task, exposure, t_align, field):
-#     # incoming exposure in [s]
-#     global hdcamcon
-#     app = QApplication(sys.argv)
+def initial_live_frames(ao_task, exposure, t_align, field):
+    # incoming exposure in [s]
+    global hdcamcon
+    app = QApplication(sys.argv)
 
-#     # Initialize your camera control object here
-#     # hdcamcon = init_cam()  # Replace with your actual camera control initialization
-#     # while True:
-#     if ao_task is not None:
-#         # outgoing exposure in [s], t_align in [ms]
-#         ex = InputApp(ao_task, exposure, t_align, field)
-#         ex.show()
-#         # sys.exit(app.exec_())
-#         exit_code = app.exec_()
-#         # sys.exit(exit_code)
-#     else:
-#         print("No Camera")
+    # Initialize your camera control object here
+    # hdcamcon = init_cam()  # Replace with your actual camera control initialization
+    # while True:
+    if ao_task is not None:
+        # outgoing exposure in [s], t_align in [ms]
+        ex = InputApp(ao_task, exposure, t_align, field)
+        ex.show()
+        # sys.exit(app.exec_())
+        exit_code = app.exec_()
+        # sys.exit(exit_code)
+    else:
+        print("No Camera")
 
-#     # do not return anything.. access everything through object of CameraWorker()
-#     camera_worker_obj = ex.camera_thread.worker
-#     # camera_worker_obj.exposure in [ms]; outgoing exposure should be in [s]
-#     return [exit_code, camera_worker_obj.ao_task, camera_worker_obj.exposure/1e3, camera_worker_obj.align_voltage, camera_worker_obj.align_field, camera_worker_obj.last_frame]
+    # do not return anything.. access everything through object of CameraWorker()
+    camera_worker_obj = ex.camera_thread.worker
+    # camera_worker_obj.exposure in [ms]; outgoing exposure should be in [s]
+    return [exit_code, camera_worker_obj.ao_task, camera_worker_obj.exposure/1e3, camera_worker_obj.align_voltage, camera_worker_obj.align_field, camera_worker_obj.last_frame]
 
-# if __name__ == '__main__':
-#     app = QApplication(sys.argv)
-#     exposure = 50       # in ms
-#     t_align = 10        # in ms
-#     field = [10, 10, 10]
-#     exposure /= 1e3
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    exposure = 50       # in ms
+    t_align = 10        # in ms
+    field = [10, 10, 10]
+    exposure /= 1e3
 
-#     try:
-#         self.pb.pb_close()
-#         self.pb.configurePB()
-#         print(
-#             '\x10 PB: \x1b[38;2;250;250;0mv' + self.pb.pb_get_version() + '\x1b[0m')  # Display the PB board version using pb_get_version()
-#     except:
-#         print("Error Initializing PB !!")
+    try:
+        self.pb.pb_close()
+        self.pb.configurePB()
+        print(
+            '\x10 PB: \x1b[38;2;250;250;0mv' + self.pb.pb_get_version() + '\x1b[0m')  # Display the PB board version using pb_get_version()
+    except:
+        print("Error Initializing PB !!")
     
-#     from DAQcontrol_class import *
-#     ao_task = AnalogOutputTask()
+    # from DAQcontrol_class import *
+    # ao_task = AnalogOutputTask()
 
-#     # suppling exposure in [s]
-#     ex = InputApp(ao_task, exposure, t_align, field)
-#     ex.show()
-#     # sys.exit(app.exec_())
-#     exit_code = app.exec_()
-#     print(f"Applied field [G] = {ex.camera_thread.worker.align_field}")
-#     print(f"Exposure [ms] = {ex.camera_thread.worker.exposure}")
-#     sys.exit(exit_code)
+    # suppling exposure in [s]
+    ex = InputApp(ao_task, exposure, t_align, field)
+    ex.show()
+    # sys.exit(app.exec_())
+    exit_code = app.exec_()
+    print(f"Applied field [G] = {ex.camera_thread.worker.align_field}")
+    print(f"Exposure [ms] = {ex.camera_thread.worker.exposure}")
+    sys.exit(exit_code)

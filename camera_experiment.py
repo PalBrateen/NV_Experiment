@@ -810,3 +810,411 @@ class CameraExperiment:
             self.camera_worker.stop_capture(free_buffer=True)
         except Exception as e:
             print(f"⚠ Camera teardown: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CameraTimeseriesExperiment — continuous frame monitoring
+# ═══════════════════════════════════════════════════════════════════════
+
+class CameraTimeseriesExperiment:
+    """Continuous PB-triggered camera acquisition at a fixed parameter point.
+
+    Camera analogue of the DAQ-based TimeseriesExperiment:
+    - PB programs the same pulse sequence as sweep (ESR, Rabi, etc.) at a
+      fixed parameter value, then runs it in a continuous loop (BRANCH)
+    - Camera is in EXTERNAL trigger mode — PB level/sync triggers each frame
+    - Each PB cycle produces Nframes (signal + reference), exactly like sweep
+    - ROI pixel-mean of each frame → mean_sig, mean_ref → contrast per cycle
+    - Ring buffers for display: contrast, sig intensity, ref intensity
+    - 30 Hz timer in session reads the rings and updates scrolling plots
+
+    This is NOT free-running camera capture.  The PB sequence determines
+    when each frame is acquired, what MW/laser state it captures, and
+    the signal vs reference assignment.  The camera just responds to
+    external triggers and delivers frames.
+
+    Usage (from session):
+        exp = CameraTimeseriesExperiment(instruments, config)
+        exp.setup()
+        exp.start()       # PB starts, polling thread reads frames
+        ...               # session timer reads exp.contrast_ring etc.
+        exp.stop()        # PB stops, thread exits
+        exp.save('cam_ts')
+        exp.teardown()
+    """
+
+    FREQ_ONLY = frozenset([
+        'esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq'])
+
+    def __init__(self, instruments: dict, config: 'ExperimentConfig'):
+        self.sg = instruments['sg']
+        self.pb = instruments['pb']
+        self.ao_task = instruments.get('ao_task')
+        self.camera_worker = instruments['camera_worker']
+
+        self.cfg = config
+        self.cw = self.camera_worker
+
+        # Camera config
+        cam_cfg = config.camera
+        self.instr_mode = cam_cfg.instr_mode
+        self.exposure = cam_cfg.exposure_s
+        self.roi = cam_cfg.roi
+        self.Nframes = cam_cfg.frames_per_cycle
+
+        # Field config
+        field_cfg = config.field_cfg
+        self.test_field = field_cfg.test_field
+        self.t_align_dc_ms = field_cfg.t_align_dc_ms
+
+        # Sequence
+        self.sequence = config.seq.name
+        self.Nsamples_cfg = config.seq.Nsamples
+        self.pb_channels = config.pb.channels
+
+        # Timeseries config
+        rt = config.runtime
+        self.display_seconds = getattr(rt, 'ts_display_seconds', 30.0)
+        self.max_duration = getattr(rt, 'ts_max_duration', 0.0)
+
+        # Fixed scan point (same logic as DAQ TimeseriesExperiment)
+        scan_names = config.scan_names
+        self.scan_name = scan_names[0] if scan_names else ''
+        scan = config.scans.get(self.scan_name)
+        indices = getattr(rt, 'seq_plot_indices', [0, -1])
+        if scan is not None and len(scan.values) > 0:
+            idx = indices[-1]
+            if idx < 0:
+                idx = len(scan.values) + idx
+            self.fixed_value = scan.values[idx]
+        else:
+            self.fixed_value = 0.0
+
+        # State
+        self.contrast_ring = None
+        self.sig_ring = None
+        self.ref_ring = None
+        self.full_contrasts = []
+        self.full_sig = []
+        self.full_ref = []
+        self.last_frame = None
+        self.cycle_count = 0
+        self.elapsed = 0.0
+        self._start_time = 0.0
+        self._running = False
+        self._stop_requested = False
+        self._poll_thread = None
+
+    # ── setup ───────────────────────────────────────────────────────
+
+    def setup(self):
+        """Program PB at fixed point, configure camera for external trigger."""
+        cfg = self.cfg
+        cw = self.camera_worker
+
+        # ── SG ──
+        if self.sequence not in ['aom_timing', 'T1ms0_train', 'drift_seq']:
+            self.sg.set_freq(cfg.mw.freq)
+            self.sg.set_amp_rf(cfg.mw.power)
+
+        is_freq = self.sequence in self.FREQ_ONLY
+        if is_freq:
+            self.sg.set_freq(self.fixed_value)
+
+        # ── PB: program at fixed point ──
+        args_names = cfg.seq.args_names
+        seq_args = list(cfg.seq.args_values)
+        if is_freq:
+            sal = seq_args
+        elif self.scan_name in args_names:
+            sal = list(seq_args)
+            sal[args_names.index(self.scan_name)] = self.fixed_value
+        else:
+            sal = [self.fixed_value] + seq_args
+
+        _, the_list = PulseBlaster.PB_program(
+            self.instr_mode, self.sequence, sal + [self.pb_channels])
+        instruction_list = [the_list[i][0] for i in range(len(the_list))]
+
+        # Compute per-sequence timing for PB runner
+        t_seq_total_pair = []
+        for part in the_list:
+            t = 0
+            if len(part) > 4 and isinstance(part[4], dict):
+                t = sum(part[4].values())
+            else:
+                for inst in part[0]:
+                    t += inst[3]
+            t_seq_total_pair.append(t)
+
+        # ── PB runner: programs the continuous trigger sequence ──
+        # Same runner as sweep — PB generates external triggers that gate
+        # camera exposures.  The Nsamples loop count makes PB run the
+        # signal+reference cycle Nsamples times, then STOP.  Since we
+        # want continuous, we pass a large Nsamples (PB loops internally).
+        t_exp_ns = self.exposure * 1e9
+        N_total = []  # auto-calculate
+
+        if self.instr_mode == 'cam_levelm':
+            self._pb_returns = self.pb.run_sequence_for_camera_level_trigger_many(
+                instruction_list, t_exp_ns, t_seq_total_pair,
+                N_total, self.Nsamples_cfg)
+        elif self.instr_mode == 'cam_syncm':
+            t_align_ns = self.t_align_dc_ms * 1e6
+            self.pb.run_sequence_for_camera_sync_trigger_many(
+                instruction_list, t_exp_ns, t_align_ns,
+                t_seq_total_pair, N_total, self.Nsamples_cfg)
+        elif 'levelm_trigger' in self.instr_mode:
+            t_align_ns = self.t_align_dc_ms * 1e6
+            self.pb.run_sequence_for_camera_level_trigger_many_bac(
+                instruction_list, t_exp_ns, t_align_ns,
+                t_seq_total_pair, N_total, self.Nsamples_cfg)
+        elif 'syncm_trigger_ao' in self.instr_mode:
+            t_align_ns = self.t_align_dc_ms * 1e6
+            self.pb.run_sequence_for_camera_sync_trigger_many_bac(
+                instruction_list, t_exp_ns, t_align_ns,
+                t_seq_total_pair, N_total, self.Nsamples_cfg)
+        elif 'timeseries' in self.instr_mode:
+            t_align_ns = self.t_align_dc_ms * 1e6
+            self.pb.custom_trigger(t_exp_ns, t_align_ns)
+        else:
+            raise ValueError(f"Unknown camera mode: {self.instr_mode}")
+
+        # ── Configure camera: EXTERNAL trigger (PB-governed) ──
+        cw.configure_camera(self.instr_mode)
+        cw.exposure = self.exposure
+        if not cw.simulate:
+            import dcamcon
+            cw.hdcamcon.set_propertyvalue(
+                dcamcon.DCAM_IDPROP.EXPOSURETIME, self.exposure)
+
+        # ROI
+        if self.roi and self.roi != [0, 0, 2048, 2048]:
+            import dcamcon
+            cw.roi = self.roi
+            cw.subarray_mode = dcamcon.DCAMPROP.MODE.ON
+            cw.set_roi()
+        else:
+            self.roi = cw.roi
+
+        self.hsize = self.roi[2] if len(self.roi) >= 4 else 2048
+        self.vsize = self.roi[3] if len(self.roi) >= 4 else 2048
+
+        # AO field
+        if self.ao_task is not None:
+            self.ao_task.set_outputs_to_constant(
+                output_field_in_gauss=self.test_field)
+
+        # ── Buffers ──
+        # Estimate contrast rate from PB cycle time
+        # One contrast point per Nframes (signal+reference)
+        # Cycle time ≈ Nframes × (exposure + cam_response + gap)
+        t_cam_response = 87.7e-6 if 'level' in self.instr_mode else 38.96e-6
+        cycle_time = self.Nframes * (self.exposure + t_cam_response + 8e-3)
+        self.contrast_rate = 1.0 / cycle_time
+        contrast_cap = int(self.display_seconds * self.contrast_rate)
+
+        from ring_buffer import RingBuffer
+        self.contrast_ring = RingBuffer(max(contrast_cap, 100))
+        self.sig_ring = RingBuffer(max(contrast_cap, 100))
+        self.ref_ring = RingBuffer(max(contrast_cap, 100))
+        self.full_contrasts = []
+        self.full_sig = []
+        self.full_ref = []
+        self.last_frame = None
+        self.cycle_count = 0
+
+        # Start camera capture (buffer allocated, capture started, waiting for triggers)
+        buffer_size = self.Nframes + 4
+        cw.start_capture(buffer_size=buffer_size, prep_only=True)
+
+        print(f"▶ CamTS: {self.sequence} @ "
+              f"{self.scan_name}={self.fixed_value:.4g}  "
+              f"mode={self.instr_mode}  "
+              f"contrast_rate≈{self.contrast_rate:.1f} pts/s  "
+              f"display={self.display_seconds}s")
+
+    # ── start / stop ────────────────────────────────────────────────
+
+    def start(self):
+        """Begin PB-triggered continuous camera acquisition."""
+        if self._running:
+            print("⚠ Already running")
+            return
+
+        self._stop_requested = False
+        self._start_time = time.perf_counter()
+        self._running = True
+
+        # Start PB — begins external triggering of camera
+        self.pb.start_sequence()
+
+        # Start polling thread that reads externally-triggered frames
+        self._poll_thread = _CameraPollingThread(self)
+        self._poll_thread.start()
+
+        # Auto-stop
+        if self.max_duration > 0:
+            self._auto_stop_time = self._start_time + self.max_duration
+        else:
+            self._auto_stop_time = None
+
+        print("▶ CamTS: PB started → camera acquiring")
+
+    def stop(self):
+        """Stop PB and camera acquisition."""
+        if not self._running:
+            return
+
+        self._stop_requested = True
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=5)
+            self._poll_thread = None
+
+        self.pb.stop_sequence()
+        self._running = False
+        self.elapsed = time.perf_counter() - self._start_time
+
+        n_c = self.contrast_ring.total_count if self.contrast_ring else 0
+        print(f"⏹ CamTS: stopped — {self.elapsed:.1f}s, "
+              f"{n_c} contrast pts, {self.cycle_count} cycles")
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    # ── save ────────────────────────────────────────────────────────
+
+    def save(self, filepath, fmt='npz'):
+        """Save camera timeseries data (contrast + intensity traces)."""
+        if not self.full_contrasts:
+            print("⚠ No data to save")
+            return
+
+        base = Path(filepath)
+        all_contrast = np.concatenate(self.full_contrasts)
+        all_sig = np.concatenate(self.full_sig) if self.full_sig else np.array([])
+        all_ref = np.concatenate(self.full_ref) if self.full_ref else np.array([])
+
+        meta = {
+            'sequence': self.sequence,
+            'scan_name': self.scan_name,
+            'fixed_value': self.fixed_value,
+            'instr_mode': self.instr_mode,
+            'exposure_s': self.exposure,
+            'roi': self.roi,
+            'frames_per_cycle': self.Nframes,
+            'elapsed_s': self.elapsed,
+            'contrast_rate': self.contrast_rate,
+            'n_cycles': self.cycle_count,
+            'mw_freq': self.cfg.mw.freq,
+            'mw_power': self.cfg.mw.power,
+        }
+
+        p = base.with_suffix('.npz')
+        np.savez_compressed(str(p),
+                            contrast=all_contrast,
+                            mean_sig=all_sig,
+                            mean_ref=all_ref,
+                            **{f'meta_{k}': v for k, v in meta.items()})
+        print(f"💾 CamTS → {p} ({len(all_contrast)} pts, "
+              f"{self.cycle_count} cycles)")
+
+        cfg_path = base.with_suffix('.yaml')
+        savefile(cfg_path, self.cfg.to_dict())
+
+    # ── teardown ───────────────────────────────────────────────────
+
+    def teardown(self):
+        if self._running:
+            self.stop()
+        try:
+            self.camera_worker.stop_capture(free_buffer=True)
+        except Exception as e:
+            print(f"⚠ CamTS teardown: {e}")
+
+
+class _CameraPollingThread(threading.Thread):
+    """Background thread that reads PB-triggered camera frames continuously.
+
+    PB generates external triggers → camera captures frames → this thread
+    reads them via wait_capevent_frameready + get_lastframedata.
+
+    Each cycle: reads Nframes (signal + reference), computes ROI means
+    and contrast, updates the experiment's ring buffers.
+    """
+
+    def __init__(self, exp: CameraTimeseriesExperiment):
+        super().__init__(daemon=True)
+        self.exp = exp
+
+    def run(self):
+        exp = self.exp
+        cw = exp.camera_worker
+        timeout_ms = int(exp.exposure * 1e3 + 500)
+        Nframes = exp.Nframes
+
+        try:
+            while not exp._stop_requested:
+                # Check auto-stop
+                if (exp._auto_stop_time is not None and
+                        time.perf_counter() > exp._auto_stop_time):
+                    break
+
+                # Read one PB cycle of externally-triggered frames
+                frames = []
+                cycle_ok = True
+                for f_idx in range(Nframes):
+                    res = cw.hdcamcon.wait_capevent_frameready(timeout_ms)
+                    if res is True:
+                        frame = cw.hdcamcon.get_lastframedata()
+                        if frame is not False:
+                            frames.append(frame)
+                        else:
+                            cycle_ok = False
+                            break
+                    else:
+                        # Timeout — PB might not be running yet, or cycle gap
+                        cycle_ok = False
+                        break
+
+                if not cycle_ok or len(frames) < Nframes:
+                    continue  # incomplete cycle, wait for next
+
+                # Stop PB sequence after reading last frame of cycle
+                # (PB will restart on next loop iteration via BRANCH)
+                # Actually: PB runs continuously, so no stop needed.
+                # Just process the frames.
+
+                # Signal = even-indexed frames, Reference = odd-indexed
+                sig_frames = frames[0::2]
+                ref_frames = frames[1::2]
+
+                # ROI pixel mean per frame, then average across repeats
+                mean_sig = float(np.mean([np.mean(f.astype(np.float64))
+                                          for f in sig_frames]))
+                mean_ref = float(np.mean([np.mean(f.astype(np.float64))
+                                          for f in ref_frames]))
+                contrast = mean_sig / mean_ref if mean_ref > 0 else np.nan
+
+                # Update ring buffers (single-writer from this thread)
+                c_arr = np.array([contrast])
+                s_arr = np.array([mean_sig])
+                r_arr = np.array([mean_ref])
+
+                exp.contrast_ring.append(c_arr)
+                exp.sig_ring.append(s_arr)
+                exp.ref_ring.append(r_arr)
+
+                # Full data for save
+                exp.full_contrasts.append(c_arr)
+                exp.full_sig.append(s_arr)
+                exp.full_ref.append(r_arr)
+
+                # Latest signal frame for image display
+                exp.last_frame = frames[0]
+                exp.cycle_count += 1
+
+        except Exception as e:
+            logging.exception(f"CamTS polling error: {e}")
+

@@ -58,14 +58,26 @@ FIVE_PERIOD = 0xA00000           # 23/22/21/20 = 1010
 def make_esr_seq(seq_dur, pb_channels):
 
     # seq_dur = 2*seq_dur
+    trig_width = clk_cyc*round(100*ns/clk_cyc)
+    # readout_width = clk_cyc*round(100*ns/clk_cyc)
+    readout_buffer = clk_cyc*round(100*ns/clk_cyc)
+    # pd_pulse refers to the readout pulse timings; in the case of multi-channel acquisition, it refers to the last channel readout pulse...
+    pd_pulse = [seq_dur/2-readout_buffer, seq_dur-readout_buffer] # seq_dur/2-readout_buffer
+    # pd_pulse.extend([(seq_dur/2-readout_buffer)/2, 1.5*(seq_dur/2-readout_buffer)])
+    # pd_pulse.extend([seq_dur/2-readout_buffer-1*us, seq_dur-readout_buffer-1*us])
     allPBchannels = []
 
-    allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [0], [seq_dur]))
-    # MW always ON
-    # allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [0], [seq_dur])) # seq_dur/2
-    allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [pulse_width]))
-        
-    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [40*ms], [seq_dur-40*ms])
+    allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [0], [seq_dur/2]))
+    allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [0], [seq_dur])) # seq_dur/2
+    allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [trig_width]))
+    
+    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [0.2*ms, 1.7*ms],
+                                 [seq_dur/2-0.2*ms]*2) #-conv_clk_sep-pulse_width
+    
+    # samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [1*ms, 3*ms], [1*ms, 1*ms])
+    # samp_clk_channel = PBchannel(samp_clk, [(pulse-conv_clk_sep-pulse_width) for pulse in pd_pulse], [trig_width for i in range(0,len(pd_pulse))]) #-conv_clk_sep-pulse_width
+    # conv_clk_channel = PBchannel(conv_clk, [pd_pulse[0]-conv_clk_sep, pd_pulse[0], pd_pulse[1]-conv_clk_sep, pd_pulse[1]], [trig_width for i in range(0,4)])
+    # samp_clk_channel = PBchannel(samp_clk, [0, seq_dur/2], [seq_dur/2, seq_dur/2])
     allPBchannels.append(samp_clk_channel)
 
     allPBchannels.append(PBchannel(pb_channels.get('lia',-1), [0], [seq_dur]))
@@ -73,9 +85,32 @@ def make_esr_seq(seq_dur, pb_channels):
     allPBchannels.append(PBchannel(pb_channels.get('bx',-1), [0], [seq_dur]))
     allPBchannels.append(PBchannel(pb_channels.get('by',-1), [0], [seq_dur]))
     allPBchannels.append(PBchannel(pb_channels.get('bz',-1), [0], [seq_dur]))
+    # allPBchannels.extend([conv_clk_channel])
     
     # print(allPBchannels)
     return allPBchannels
+
+# def make_esr_seq(seq_dur, pb_channels):
+
+#     # seq_dur = 2*seq_dur
+#     allPBchannels = []
+
+#     allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [0], [seq_dur]))
+#     # MW always ON
+#     # allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [0], [seq_dur])) # seq_dur/2
+#     allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [pulse_width]))
+        
+#     samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [40*ms], [seq_dur-40*ms])
+#     allPBchannels.append(samp_clk_channel)
+
+#     allPBchannels.append(PBchannel(pb_channels.get('lia',-1), [0], [seq_dur]))
+    
+#     allPBchannels.append(PBchannel(pb_channels.get('bx',-1), [0], [seq_dur]))
+#     allPBchannels.append(PBchannel(pb_channels.get('by',-1), [0], [seq_dur]))
+#     allPBchannels.append(PBchannel(pb_channels.get('bz',-1), [0], [seq_dur]))
+    
+#     # print(allPBchannels)
+#     return allPBchannels
 #------------------------------------------------------------------------------
 
 def make_opt_readout_time_sequence(t_readoutDelay, t_pi, t_AOM, AOM_lag, MW_lag):

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QStatusBar, QFrame, QSizePolicy, QGroupBox
 )
 from PySide6.QtCore import Qt, Slot, QTimer
-from PySide6.QtGui import QColor, QPalette, QPainter, QFontMetrics
+from PySide6.QtGui import QColor, QPalette, QPainter, QFontMetrics, QIcon
 from functools import reduce
 # from dark_mode_and_extended_error import DARK_STYLESHEET, StatusBarLongLabel
 
@@ -30,7 +30,6 @@ from functools import reduce
 expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')
 # Add the directory to sys.path
 sys.path.append(expt_dir)
-# Import the module as if it were in the current directory
 
 # Try to import spinapi, fall back to simulation mode if not available
 try:
@@ -45,7 +44,7 @@ except ImportError:
 # ============================================================================
 CLOCK_FREQ = 500
 SPINAPI_DLL_PATH = r'C:\SpinCore\SpinAPI\lib\spinapi64.dll'
-WORKING_DIRECTORY = r'D:\Brateen\Saved_Data\SavedStates\PBStates'  # Default working directory for state files
+STATEFILE_DIRECTORY = r'D:\Brateen\Saved_Data\SavedStates\PBStates'  # Default working directory for state files
 CHANNEL_CONFIG_FILE = 'pb_channels.json'
 DEFAULT_STATE_FILE = 'last_state.json'
 MAX_CHANNELS = 21  # PulseBlaster has 21 channels (1-21)
@@ -65,12 +64,10 @@ QMainWindow, QWidget {
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 10pt;
 }
-
 QLabel {
     color: #ffffff;
     padding: 2px;
 }
-
 QLineEdit, QSpinBox, QComboBox {
     background-color: #484848;
     color: #ffffff;
@@ -79,16 +76,13 @@ QLineEdit, QSpinBox, QComboBox {
     padding: 4px;
     selection-background-color: #264f78;
 }
-
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border: 1px solid #009de0;
 }
-
 QLineEdit:disabled, QSpinBox:disabled {
     background-color: #252526;
     color: #6d6d6d;
 }
-
 QPushButton {
     background-color: #009de0;
     color: white;
@@ -97,20 +91,16 @@ QPushButton {
     padding: 2px 2px;
     /*min-width: 40px;*/
 }
-
 QPushButton:hover {
     background-color: #02b0fa;
 }
-
 QPushButton:pressed {
     background-color: #094771;
 }
-
 QPushButton:disabled {
     background-color: #3f3f46;
     color: #6d6d6d;
 }
-
 /* Checkable channel buttons - unchecked state */
 QPushButton[checkable="true"] {
     background-color: #3c3c3c;
@@ -119,22 +109,18 @@ QPushButton[checkable="true"] {
     padding: 4px 8px;
     min-width: 30px;
 }
-
 /* Checkable channel buttons - checked (active) state - GREEN */
 QPushButton[checkable="true"]:checked {
     background-color: #2e7d32;
     color: white;
     border: 1px solid #4caf50;
 }
-
 QPushButton[checkable="true"]:hover {
     background-color: #4a4a4a;
 }
-
 QPushButton[checkable="true"]:checked:hover {
     background-color: #388e3c;
 }
-
 /* The Main Box */
 QSpinBox {
     background-color: #2d2d2d;
@@ -144,18 +130,15 @@ QSpinBox {
     padding-right: 5px; /* Leave space for buttons */
     selection-background-color: #444444;
 }
-
 /* The Buttons Container */
 QSpinBox::up-button, QSpinBox::down-button {
     background-color: #3d3d3d;
     border-left: 1px solid #555555;
     width: 20px;
 }
-
 QSpinBox::up-button:hover, QSpinBox::down-button:hover {
     background-color: #4d4d4d;
 }
-
 /* The Arrows (Triangle Hack) */
 QSpinBox::up-arrow {
     width: 0px; height: 0px;
@@ -163,34 +146,28 @@ QSpinBox::up-arrow {
     border-right: 4px solid #3d3d3d;
     border-bottom: 5px solid #ffffff;
 }
-
 QSpinBox::down-arrow {
     width: 0px; height: 0px;
     border-left: 4px solid #3d3d3d;
     border-right: 4px solid #3d3d3d;
     border-top: 5px solid #ffffff;
 }
-
 /* Disabled State - Critical for Logic */
 QSpinBox:disabled {
     background-color: #1e1e1e;
     color: #777777;
 }
-
 QSpinBox::up-arrow:disabled, QSpinBox::down-arrow:disabled {
     border-bottom-color: #555555;
     border-top-color: #555555;
 }
-
 QComboBox {
     padding-right: 20px;
 }
-
 QComboBox::drop-down {
     border: none;
     width: 20px;
 }
-
 QComboBox::down-arrow {
     width: 0px; height: 0px;
     border-left: 4px solid #484848;
@@ -198,62 +175,50 @@ QComboBox::down-arrow {
     border-top: 5px solid #ffffff;
     margin-right: 5px;
 }
-
 QComboBox QAbstractItemView {
-    background-color: #2d2d30;
-    color: #ffffff;
+    background-color: #2d2d30; color: #ffffff;
     selection-background-color: #094771;
     border: 1px solid #3f3f46;
 }
-
 QScrollArea {
     border: 3px solid #3f3f46;
     border-radius: 5px;
     background-color: #252526;
 }
-
 QScrollBar:vertical {
     background-color: #1e1e1e;
     width: 14px;
     margin: 0;
 }
-
 QScrollBar::handle:vertical {
     background-color: #5a5a5a;
     min-height: 30px;
     border-radius: 7px;
     margin: 2px;
 }
-
 QScrollBar::handle:vertical:hover {
     background-color: #787878;
 }
-
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
 }
-
 QScrollBar:horizontal {
     background-color: #1e1e1e;
     height: 14px;
     margin: 0;
 }
-
 QScrollBar::handle:horizontal {
     background-color: #5a5a5a;
     min-width: 30px;
     border-radius: 7px;
     margin: 2px;
 }
-
 QScrollBar::handle:horizontal:hover {
     background-color: #787878;
 }
-
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0;
 }
-
 QGroupBox {
     border: 3px solid #3f3f46;
     border-radius: 5px;
@@ -261,18 +226,15 @@ QGroupBox {
     padding-top: 8px;
     color: #ffffff;
 }
-
 QGroupBox::title {
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 5px;
 }
-
 QCheckBox {
     color: #ffffff;
     spacing: 8px;
 }
-
 QCheckBox::indicator {
     width: 16px;
     height: 16px;
@@ -280,23 +242,19 @@ QCheckBox::indicator {
     border-radius: 3px;
     background-color: #2d2d30;
 }
-
 QCheckBox::indicator:checked {
     background-color: #0e639c;
     border-color: #859199;
 }
-
 QStatusBar {
     background-color: #303030;
     color: white;
     border-top: 2px solid #878787;
 }
-
 QStatusBar QLabel {
     color: white;
     padding: 2px 8px;
 }
-
 QFrame#separator {
     background-color: #3f3f46;
 }
@@ -405,8 +363,8 @@ class SpinAPIGUI(QMainWindow):
         self.logger = logging.getLogger('pyPBLV')
         
         # Working directory for state files
-        self.working_directory = Path(WORKING_DIRECTORY)
-        self.working_directory.mkdir(parents=True, exist_ok=True)
+        self.statefile_directory = Path(STATEFILE_DIRECTORY)
+        self.statefile_directory.mkdir(parents=True, exist_ok=True)
         
         # Channel configuration
         self.channel_names = {}
@@ -431,7 +389,7 @@ class SpinAPIGUI(QMainWindow):
 
     def load_channel_names(self):
         """Load channel names from config file in working directory."""
-        config_path = self.working_directory / CHANNEL_CONFIG_FILE
+        config_path = self.statefile_directory / CHANNEL_CONFIG_FILE
         try:
             if config_path.exists():
                 with open(config_path, 'r') as f:
@@ -448,7 +406,7 @@ class SpinAPIGUI(QMainWindow):
 
     def save_channel_names(self):
         """Save channel names to config file in working directory."""
-        config_path = self.working_directory / CHANNEL_CONFIG_FILE
+        config_path = self.statefile_directory / CHANNEL_CONFIG_FILE
         try:
             # Convert int keys to string for JSON
             to_save = {str(k): v for k, v in self.channel_names.items() if v.strip()}
@@ -736,7 +694,7 @@ class SpinAPIGUI(QMainWindow):
             self.status_message.setStyleSheet("color: #4caf50; font-weight: bold;")
 
     def refresh_state_files(self):
-        """Refresh the list of state files in the working directory."""
+        """Refresh the list of state files (.json) in the state save directory."""
         # Save current text if user typed something
         current_text = self.state_combo.currentText()
         
@@ -744,9 +702,9 @@ class SpinAPIGUI(QMainWindow):
         
         try:
             self.state_combo.addItem(Path(DEFAULT_STATE_FILE).stem, DEFAULT_STATE_FILE)
-            if self.working_directory.exists():
-                json_files = sorted(self.working_directory.glob("*.json"))
-                json_files.remove(self.working_directory / DEFAULT_STATE_FILE)
+            if self.statefile_directory.exists():
+                json_files = sorted(self.statefile_directory.glob("*.json"))
+                json_files.remove(self.statefile_directory / DEFAULT_STATE_FILE)
                 for f in json_files:
                     if f.name != CHANNEL_CONFIG_FILE:
                         self.state_combo.addItem(f.stem, str(f))
@@ -1056,7 +1014,7 @@ class SpinAPIGUI(QMainWindow):
                 filename = Path(f"pb_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             
             # Remove .json extension if user typed it
-            filepath = self.working_directory / filename.with_suffix('.json')
+            filepath = self.statefile_directory / filename.with_suffix('.json')
             
             state_data = {
                 'window_width': self.width(),
@@ -1106,7 +1064,7 @@ class SpinAPIGUI(QMainWindow):
             # If no data (user typed), construct path
             # if not filepath:
             print(f"filename: {filename}")
-            filepath = self.working_directory / filename.with_suffix(".json")
+            filepath = self.statefile_directory / filename.with_suffix(".json")
             # else:
             #     filepath = Path(filepath)
             
@@ -1315,24 +1273,48 @@ class SpinAPIGUI(QMainWindow):
         event.accept()
         QApplication.quit()
 
+def set_dark_theme(app):
+    """Set application-wide dark theme"""
+    app.setStyle("Fusion")
+    
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
+    dark_palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+    dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(30, 30, 30))  # Dark tooltip
+    dark_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(212, 212, 212))  # Light text
+    dark_palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
+    dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
+    dark_palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+    dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    # Disabled colors
+    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, "#7f7f7f")
+    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, "#7f7f7f")
+    app.setPalette(dark_palette)
 # ============================================================================
 # Main Entry Point
 # ============================================================================
 if __name__ == '__main__':
     
     # Must be called before creating QApplication
-    myappid = 'bplab.scopeviewer.v2'
+    myappid = 'aglab.pb'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     setup_logging()
     app = QApplication(sys.argv)
-        
-    # Set application-wide palette for dark theme
-    app.setStyle('Fusion')
-    # app.setStyleSheet('QMainWindow{background-color: white;border: 10px solid white;}')
-    
-    gui = SpinAPIGUI()
-    gui.show()
+    set_dark_theme(app)
+
+    pbgui = SpinAPIGUI()
+
+    app_icon = QIcon(expt_dir + r"\gui\pb\gui_icon.png") # .ico is preferred for Windows
+    pbgui.setWindowIcon(app_icon)
+    app.setWindowIcon(app_icon) # Sets it for the whole application
+
+    pbgui.show()
     
     sys.exit(app.exec())
 

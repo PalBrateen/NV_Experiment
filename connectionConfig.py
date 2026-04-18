@@ -43,7 +43,10 @@ def cal_samp_rate():
 daq_max_samp_rate = cal_samp_rate()
 
 #SRS Connections-------------------------------------------------------
-sg_addr = ["ASRL4::INSTR", "TCPIP0::10.56.10.24::inst0::INSTR"]
+sg_addr = ["ASRL4::INSTR", 
+           "TCPIP0::10.56.10.24::inst0::INSTR",
+           "TCPIP0::169.254.59.63::inst0::INSTR"
+           ]
 
 
 #%%------------------------- END OF USER INPUT ----------------------------------#
