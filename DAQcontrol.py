@@ -298,7 +298,7 @@ class  AnalogOutputTask(DAQTask):
         elif coil == 'confocal':
             vi_calibration = [100., 100., 64.]          # confocal coil
         elif coil == 'small_confocal':
-            vi_calibration = [100., 100., 0.7]
+            vi_calibration = [100., 100., 0.68]
         elif coil == 'propulsion':
             vi_calibration = [19., 19., 37.]            # propulsion coil
         else:
@@ -457,13 +457,138 @@ class  AnalogOutputTask(DAQTask):
     #     return output_aovoltage
 
 class CounterInputTask(DAQTask):
-    def __init__(self, edge_config: str):
-        super().__init__()
-        self.edge_config = edge_config
-    
+    def __init__(self,
+                 dev = "P6363",
+                 counter: Optional[List[int]] = [0],
+                 sampling_source: str = 'internal',
+                 sampling_rate: float = 10e5,
+                 sampling_mode: str = "hwtimed",
+                 samps_per_chan: int = 100,
+                 start_trigger_source: str = '',  # Optional trigger
+                 start_trigger_edge: str = "rising",       # Only used if start_trigger_source exists
+                 # TODO: PAUSE TRIGGER
+                 pause_trigger_source: str = '',
+                 name: str = '',
+        ):
+        super().__init__(name)
+        self.dev = dev
+        self.counter = counter or []
+        self.sampling = {
+            'source': '' if sampling_source.lower() in ['internal', ''] else sampling_source,
+            'edge': Edge.RISING,
+            'rate': sampling_rate,
+            'mode': sampling_mode,
+            'samps_per_chan': samps_per_chan,
+        }
+
+        # Store trigger configuration if provided
+        self.start_trigger:dict = {}
+        # print(start_trigger_source)
+        if start_trigger_source != '':
+            self.start_trigger = {
+                "source": start_trigger_source,
+                "edge": start_trigger_edge,
+                # "level": trigger_level,
+            }
+        
+        self.pause_trigger:dict = {}
+        if pause_trigger_source != '':
+            self.pause_trigger = {
+                "type": "digital",
+                "source": pause_trigger_source,
+                "level": Level.LOW,
+            }
+
+        self._task: nidaqmx.Task
+        self.configure()
+
     def configure(self):
-        # Specific counter input configuration
-        pass
+        try:
+            print("Configuring Analog Input..")
+            self._task = nidaqmx.Task()
+            # for channel in self.channels:
+            ci_channel = self._task.ci_channels.add_ci_count_edges_chan(
+                counter=f"{self.dev}/ctr{0}",
+            )
+            ci_channel.ci_count_edges_term = "/P6363/PFI2"
+
+            # print(DAQConfiguration.get_sampling_mode(mode_name=self.sampling_mode))
+            self._task.timing.cfg_samp_clk_timing(
+                rate = self.sampling['rate'],
+                source = self.sampling['source'],
+                active_edge = self.sampling['edge'],
+                sample_mode = DAQConfiguration.get_sampling_mode(mode_name=self.sampling['mode']),
+                # samps_per_chan = int(self.sampling['samps_per_chan']),
+            )
+
+            self._configure_triggers()
+
+            self._task_state = "configured"
+            print("✔ Analog Input configured!")
+
+        except Exception as e:
+            self._task_state = "error"
+            logging.exception(f"❌ Configuration failed: {str(e)}")
+            raise #RuntimeError(f"❌ Configuration failed: {str(e)}")
+
+    def _configure_triggers(self):
+        """Private method to handle trigger configuration"""
+        try:
+            # Digital START trigger
+            if self.start_trigger:
+                self._task.triggers.arm_start_trigger.dig_edge_src = self.start_trigger["source"]
+                self._task.triggers.arm_start_trigger.dig_edge_edge = DAQConfiguration.get_start_trigger_edge(
+                                                                    edge_name=self.start_trigger["edge"])
+            
+            # Pause trigger
+            if self.pause_trigger:
+                self._task.triggers.pause_trigger.trig_type = TriggerType.DIGITAL_LEVEL
+                self._task.triggers.pause_trigger.dig_lvl_src = self.pause_trigger["source"]
+                self._task.triggers.pause_trigger.dig_lvl_when = self.pause_trigger["level"]
+
+        except Exception as e:
+            logging.exception(f"❌ Trigger configuration failed: {str(e)}")
+            raise #RuntimeError(f"Trigger configuration failed: {str(e)}")
+
+    def start(self):
+        try:
+            if self._task_state != "configured":
+                raise RuntimeError("Task must be configured before starting")
+            self._task.start()
+            self._task_state = "running"
+        except Exception as e:
+            self._task_state = "error"
+            logging.exception(f"❌ Start failed: {str(e)}")
+            raise #RuntimeError(f"❌ Start failed: {str(e)}")
+
+    def read_daq(self,Nsamples,timeout=120):
+        try:
+            counts = self._task.read(Nsamples, timeout)
+        except Exception as excpt:
+            logging.exception(f'❌ Error: could not Read DAQ. Please check your DAQ\'s connections.\
+                  \nException details: \x1b[38;2;250;37;41m{str(type(excpt).__name__)}. {str(excpt)}\x1b[0m')
+            sys.exit()
+        return counts
+
+    def stop(self):
+        try:
+            if self._task_state == "running":
+                self._task.stop()
+                self._task_state = "stopped"
+        except Exception as e:
+            self._task_state = "error"
+            logging.exception(f"❌ Stop failed: {str(e)}")
+            raise #RuntimeError(f"❌ Stop failed: {str(e)}")
+    
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        try:
+            if hasattr(self, '_task') and self._task is not None:
+                if self._task_state == "running":
+                    self.stop()
+                self._task.close()
+        except Exception as e:
+            logging.exception(f"⚠ Warning: Error during cleanup: {str(e)}")
 
 # Configuration mapping
 class DAQConfiguration:

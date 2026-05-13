@@ -4,7 +4,7 @@ from fileinput import filename
 import connectionConfig as concfg, matplotlib.pyplot as plt, numpy as np, time
 import dialog, psutil, json, yaml, os, logging, matplotlib as mpl, h5py
 from PBcontrol import PulseBlaster
-from DAQcontrol import AnalogInputTask, AnalogOutputTask#, DAQ_write_pattern
+from DAQcontrol import AnalogInputTask, AnalogOutputTask, CounterInputTask#, DAQ_write_pattern
 from sequencecontrol import sequencecontrol
 from SGcontrol import SignalGenerator, SignalGenerator_sim
 from spinapi import ns, us, ms, Inst
@@ -41,6 +41,8 @@ fsplit = lambda b: (2870 - 2.8*b, 2870 + 2.8*b)
 # TODO: save a h5 file with the parameter - far better than putting the parameters in the yaml file!!
 seqctrl = sequencecontrol(params)
 ai_task: AnalogInputTask
+# ai_task: CounterInputTask
+
 def initialize_instr(sequence):
     global ao_task, pb #,ai_task, 
     # TODO: how to handle 'sequence' to PulseBlaster()
@@ -56,7 +58,7 @@ def initialize_instr(sequence):
         logging.exception(f"❌ Error in PB Init: {e}")
 
     try:
-        ao_task = AnalogOutputTask(dev="P6363", channels=[0,1,2], coil='small_confocal')    # AO alreay configured here in __init__()
+        ao_task = AnalogOutputTask(dev="U9263", channels=[0,1,2], coil='small_confocal')    # AO alreay configured here in __init__()
         # ao_task = None
         # TODO: need to do this properly - how to init the ai task
         # ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-10, 10), channels=concfg.input_terminals, trigger_source=concfg.samp_clk_terminal)
@@ -543,11 +545,14 @@ if display_parameters == 'yes':
         
         #TODO Clear up the mess in AnalogInputTask initialization
         if reload_pb:
-            ai_task = AnalogInputTask(channels=concfg.input_terminals, voltage_range=(-10, 10),
-                                      sampling_rate=concfg.daq_max_samp_rate, sampling_source=concfg.samp_clk_terminal,
-                                      samps_per_chan=int(daq_Nsamples),
-                                      start_trigger_source=concfg.start_trig_terminal,
-                                      )
+            # ai_task = AnalogInputTask(channels=concfg.input_terminals, voltage_range=(-10, 10),
+            #                           sampling_rate=concfg.daq_max_samp_rate, sampling_source=concfg.samp_clk_terminal,
+            #                           samps_per_chan=int(daq_Nsamples),
+            #                           start_trigger_source=concfg.start_trig_terminal,
+            #                           )
+            # ai_task = CounterInputTask(sampling_source=concfg.samp_clk_terminal,
+            #                            start_trigger_source=concfg.start_trig_terminal,
+            #                            pause_trigger_source=concfg.pause_clk_terminal)
             # without LIA
             # ai_task = AnalogInputTask(voltage_range=(-0.2, 0.2), channels=concfg.input_terminals, sampling_source=concfg.samp_clk_terminal,
             #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
@@ -563,14 +568,15 @@ if display_parameters == 'yes':
             #                           sampling_rate=10e3, sampling_source=concfg.samp_clk_terminal,
             #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
             # with LIA multiple samples
-            # ai_task = AnalogInputTask(voltage_range=(-10, 10), channels=concfg.input_terminals,
-            #                           sampling_rate=10e3, sampling_source='',
-            #                           start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
+            ai_task = AnalogInputTask(voltage_range=(-10, 10), channels=concfg.input_terminals,
+                                      sampling_rate=10e3, sampling_source='',
+                                      start_trigger_source=concfg.start_trig_terminal, samps_per_chan=int(daq_Nsamples))
         else:
             if load_pb_all_params:
-                ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-0.2, 0.2),
-                                  channels=concfg.input_terminals, start_trigger_source=concfg.start_trig_terminal,
-                                  samps_per_chan=int(daq_Nsamples*Nscanpts*Nruns))
+                # ai_task = AnalogInputTask(sampling_rate=concfg.daq_max_samp_rate, voltage_range=(-0.2, 0.2),
+                #                   channels=concfg.input_terminals, start_trigger_source=concfg.start_trig_terminal,
+                #                   samps_per_chan=int(daq_Nsamples*Nscanpts*Nruns))
+                pass
         # print(f"Samples per channel = {ai_task._task.timing.samp_quant_samp_per_chan}")
 
         print(f"▶ DAQ configured for {params['seq']['Nsamples']} samples...")
@@ -593,8 +599,8 @@ if display_parameters == 'yes':
                 for i_scanpt in range (0, params['scan'][params['scan']['names'][0]]['Nscanpts']):
                     # if i_scanpt>0:
                     #     break
-                    # if i_scanpt % 10 == 0:
-                    print(i_scanpt+1,' / ',params['scan'][params['scan']['names'][0]]['Nscanpts'],': ',param[i_scanpt])
+                    if i_scanpt % 10 == 0:
+                        print(i_scanpt+1,' / ',params['scan'][params['scan']['names'][0]]['Nscanpts'],': ',param[i_scanpt])
                         # print(f"Waiting: {params['seq']['t_total(s)']*params['seq']['Nsamples']}s")
                     [cts, scan_time] = acquire_data(daq_Nsamples, param[i_scanpt], params['seq']['sequence'],
                                                     seqArgList+[params['pb']['channels']], trial_run)
@@ -620,7 +626,7 @@ if display_parameters == 'yes':
         print(" Run time = %.2fs" % exec_time)        # in seconds
         print(" Scan time = %.2fs" % (np.sum(scan_time_list)))   # type: ignore # in seconds
 
-        data_array += 0.0035
+        # data_array += 0.0035
         # plot_raw_data(data=data_array)
         fig, axs = plt.subplots(1,2, num=f"{time.strftime(' [%H:%M:%S]', time.localtime())}", figsize=(10,5))
         for i_run in range(0, Nruns):

@@ -61,13 +61,14 @@ def make_esr_seq(seq_dur, pb_channels):
     allPBchannels = []
 
     allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [0], [seq_dur]))
+    # allPBchannels.append(PBchannel(pb_channels.get('pause',-1), [100*ns/2, seq_dur/2+100*ns/2], [seq_dur/2-100*ns/2]*2))
     # MW always ON
-    # allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [0], [seq_dur])) # seq_dur/2
+    allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [0], [seq_dur])) # seq_dur/2
     allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [pulse_width]))
         
-    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [40*ms], [seq_dur-40*ms])
-    allPBchannels.append(samp_clk_channel)
-
+    allPBchannels.append(PBchannel(pb_channels.get('samp',-1), [40*ms], [seq_dur-40*ms]))
+    # allPBchannels.append(PBchannel(pb_channels.get('samp',-1), [seq_dur/2, seq_dur], [pulse_width]*2))
+    
     allPBchannels.append(PBchannel(pb_channels.get('lia',-1), [0], [seq_dur]))
     
     allPBchannels.append(PBchannel(pb_channels.get('bx',-1), [0], [seq_dur]))

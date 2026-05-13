@@ -8,7 +8,7 @@ PBclk = 500
 #  PB_STARTtrig is the bit number of the PB channel used to generate the pulses fed to the Data Acquisition Card (DAQ) to trigger the start of data aquisition at each experiment scan point.
 #  PB_DAQ is the bit number of the PB channel used to generate the pulses fed to the DAQ to gate/act as a sample clock to time the data aquisition.
 
-# PB_conv_clk = 0     # Conv CLK -- PFI 9
+PB_pause_trig = 0     # Conv CLK -- PFI 9
 PB_samp_clk = 1     # Samp CLK -- PFI 14
 PB_MW = 2
 PB_AOM = 3
@@ -29,7 +29,7 @@ input_terminals = [21]#, "P6363/ai8"]
 input_terminals = [15]
 
 # Detector connected to AI7 and PD to AI6
-conv_clk_terminal = "PFI9"     # ADC conversion pulses
+pause_clk_terminal = "PFI9"     # ADC conversion pulses
 samp_clk_terminal = "PFI14"     # Start sampling from the channels in the scan list
 start_trig_terminal = "PFI15"   # Trigger the start of data acquisiton
 
@@ -55,7 +55,7 @@ laser = 2**PB_AOM
 start_trig = 2**PB_start_trig
 samp_clk = 2**PB_samp_clk
 MW = 2**PB_MW
-# conv_clk = 2**PB_conv_clk
+pause_trig = 2**PB_pause_trig
 I = 2**PB_I
 Q = 2**PB_Q
 camera = 2**PB_camera
@@ -72,6 +72,7 @@ params = {
         # 'pb_clk': PBclk,
         'triggers': {
             'laser': laser,
+            'pause': pause_trig,
             'start_trig': start_trig,
             'samp_clk': samp_clk,
             'mw': MW,
