@@ -19,11 +19,10 @@ from enum import Enum
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, 
     QPushButton, QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox,
-    QScrollArea
+    QScrollArea, QButtonGroup
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, Property, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QBrush, QPen, QFont
-
 from scope_v2_core import (
     ChannelConfig, DAQDeviceInfo, CircularBuffer,
     ObservableConfig, get_device_info, enumerate_devices
@@ -99,10 +98,53 @@ class ToggleSwitch(QCheckBox):
         p.drawEllipse(int(self._knob_position), 3, 15, 15)
 
 
+# class SegmentedButton(QWidget):
+#     """Segmented button group"""
+#     valueChanged = Signal(int)
+    
+#     def __init__(self, options: List[str], parent=None):
+#         super().__init__(parent)
+#         layout = QHBoxLayout(self)
+#         layout.setContentsMargins(0, 0, 0, 0)
+#         layout.setSpacing(0)
+        
+#         self.buttons = []
+#         self._value = 0
+        
+#         for i, opt in enumerate(options):
+#             btn = QPushButton(opt)
+#             btn.setCheckable(True)
+#             btn.setChecked(i == 0)
+#             btn.clicked.connect(lambda _, idx=i: self._on_clicked(idx))
+            
+#             if i == 0:
+#                 btn.setStyleSheet("border-top-right-radius:0;border-bottom-right-radius:0;")
+#             elif i == len(options) - 1:
+#                 btn.setStyleSheet("border-top-left-radius:0;border-bottom-left-radius:0;")
+#             else:
+#                 btn.setStyleSheet("border-radius:0;")
+                
+#             layout.addWidget(btn)
+#             self.buttons.append(btn)
+            
+#     def _on_clicked(self, idx: int):
+#         self._value = idx
+#         for i, btn in enumerate(self.buttons):
+#             btn.setChecked(i == idx)
+#         self.valueChanged.emit(idx)
+        
+#     def value(self) -> int:
+#         return self._value
+        
+#     def setValue(self, idx: int):
+#         if 0 <= idx < len(self.buttons):
+#             self._on_clicked(idx)
+
 class SegmentedButton(QWidget):
     """Segmented button group"""
     valueChanged = Signal(int)
-    
+    textChanged = Signal(str) # Added for parity with ComboBox
+
     def __init__(self, options: List[str], parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
@@ -110,37 +152,52 @@ class SegmentedButton(QWidget):
         layout.setSpacing(0)
         
         self.buttons = []
-        self._value = 0
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True) # Ensures only one is checked
         
         for i, opt in enumerate(options):
             btn = QPushButton(opt)
             btn.setCheckable(True)
-            btn.setChecked(i == 0)
-            btn.clicked.connect(lambda _, idx=i: self._on_clicked(idx))
             
+            # Styling logic remains the same
             if i == 0:
                 btn.setStyleSheet("border-top-right-radius:0;border-bottom-right-radius:0;")
             elif i == len(options) - 1:
                 btn.setStyleSheet("border-top-left-radius:0;border-bottom-left-radius:0;")
             else:
                 btn.setStyleSheet("border-radius:0;")
-                
+            
             layout.addWidget(btn)
             self.buttons.append(btn)
-            
-    def _on_clicked(self, idx: int):
-        self._value = idx
-        for i, btn in enumerate(self.buttons):
-            btn.setChecked(i == idx)
-        self.valueChanged.emit(idx)
-        
-    def value(self) -> int:
-        return self._value
-        
-    def setValue(self, idx: int):
-        if 0 <= idx < len(self.buttons):
-            self._on_clicked(idx)
+            self._group.addButton(btn, i) # Assign ID as the index
 
+        self._group.idClicked.connect(self._on_id_clicked)
+        self.setValue(0)
+
+    def _on_id_clicked(self, idx: int):
+        self.valueChanged.emit(idx)
+        self.textChanged.emit(self.currentText())
+
+    def value(self) -> int:
+        return self._group.checkedId()
+
+    def setValue(self, idx: int):
+        btn = self._group.button(idx)
+        if btn:
+            btn.setChecked(True)
+            self.valueChanged.emit(idx)
+
+    def currentText(self) -> str:
+        """Mimics QComboBox.currentText()"""
+        checked_btn = self._group.checkedButton()
+        return checked_btn.text() if checked_btn else ""
+
+    def setCurrentText(self, text: str):
+        """Mimics QComboBox.setCurrentText()"""
+        for i, btn in enumerate(self.buttons):
+            if btn.text() == text:
+                self.setValue(i)
+                break
 
 # =============================================================================
 # CUSTOM AXIS - NO MINOR TICK LABELS
@@ -1077,15 +1134,17 @@ class ChannelConfigWidget(QWidget):
         colors = ['#00BFFF', '#FF6B6B', '#4ECDC4', '#FFE66D']
         color = colors[self.ch_idx % len(colors)]
         
+        r1 = QHBoxLayout()
         # Enable
         self.enable_cb = QCheckBox(f"Ch {self.ch_idx + 1}")
         self.enable_cb.setChecked(True)
         self.enable_cb.setStyleSheet(f"color: {color};")
         self.enable_cb.toggled.connect(self._emit_config)
         layout.addWidget(self.enable_cb, 0, 0)
-        
+
         # Physical channel
         self.phys_combo = QComboBox()
+        self.phys_combo.setFixedWidth(55)
         if self.device_info and self.device_info.ai_channels:
             self.phys_combo.addItems([ch.split('/')[-1] for ch in self.device_info.ai_channels])
         else:
@@ -1093,37 +1152,39 @@ class ChannelConfigWidget(QWidget):
         if self.ch_idx < self.phys_combo.count():
             self.phys_combo.setCurrentIndex(self.ch_idx)
         self.phys_combo.currentTextChanged.connect(self._emit_config)
-        layout.addWidget(self.phys_combo, 0, 1)
+        r1.addWidget(self.phys_combo)
         
         # Terminal config
-        layout.addWidget(QLabel("Term:"), 1, 0)
+        # layout.addWidget(QLabel("Term:"), 1, 0)
         self.term_combo = QComboBox()
+        self.term_combo.setFixedWidth(60)
         if self.device_info and self.device_info.terminal_configs:
             self.term_combo.addItems(self.device_info.terminal_configs)
         else:
             self.term_combo.addItems(["RSE", "NRSE", "DIFF"])
         self.term_combo.currentTextChanged.connect(self._emit_config)
-        layout.addWidget(self.term_combo, 1, 1)
+        r1.addWidget(self.term_combo)
+        layout.addLayout(r1, 0, 1)
         
         # Voltage range
-        layout.addWidget(QLabel("Range:"), 2, 0)
+        layout.addWidget(QLabel("Range (V):"), 1, 0)
         range_layout = QHBoxLayout()
         
         self.min_spin = QDoubleSpinBox()
-        self.min_spin.setRange(-100, 100)
-        self.min_spin.setValue(-10)
-        self.min_spin.setSuffix(" V")
+        self.min_spin.setRange(-10, 0)
+        self.min_spin.setValue(-1)
+        # self.min_spin.setSuffix(" V")
         self.min_spin.valueChanged.connect(self._emit_config)
         range_layout.addWidget(self.min_spin)
         
         self.max_spin = QDoubleSpinBox()
-        self.max_spin.setRange(-100, 100)
-        self.max_spin.setValue(10)
-        self.max_spin.setSuffix(" V")
+        self.max_spin.setRange(0, 10)
+        self.max_spin.setValue(1)
+        # self.max_spin.setSuffix(" V")
         self.max_spin.valueChanged.connect(self._emit_config)
         range_layout.addWidget(self.max_spin)
         
-        layout.addLayout(range_layout, 2, 1)
+        layout.addLayout(range_layout, 1, 1)
         
     def _emit_config(self):
         colors = ['#00BFFF', '#FF6B6B', '#4ECDC4', '#FFE66D']

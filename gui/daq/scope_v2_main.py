@@ -12,6 +12,7 @@ Updates:
 Author: BP Lab
 Date: 2025
 """
+# TODO: channel-wise offset inputs needed
 
 import sys, numpy as np, gc, pyqtgraph as pg, ctypes, psutil, json, h5py, os
 from typing import Optional, Dict, List
@@ -49,18 +50,86 @@ expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')     # absolute path to t
 sys.path.append(expt_dir)   # Add to sys.path
 
 DARK_STYLE = """
-QMainWindow, QWidget { background-color: #1e1e1e; color: #e0e0e0; }
-QGroupBox { border: 1px solid #3d3d3d; border-radius: 4px; margin-top: 8px; padding-top: 8px; }
+QMainWindow,QWidget{background-color:#1e1e1e;color:#d4d4d4;font-family:'Segoe UI',Arial,sans-serif;}
+QGroupBox { border: 1px solid #3d3d3d; border-radius: 4px; margin-top: 4px; padding-top: 4px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #a0a0a0; }
-QTabWidget::pane { border: 1px solid #3d3d3d; background-color: #252525; }
-QTabBar::tab { background-color: #2d2d2d; color: #a0a0a0; padding: 8px 16px; border: 1px solid #3d3d3d; }
-QTabBar::tab:selected { background-color: #252525; color: #fff; }
+QTabWidget::pane { border: 1px solid #3c3c3c; background-color: #1e1e1e; }
+QTabBar::tab { background-color: #2d2d2d; color: #a0a0a0; padding: 4px 10px;
+    border: 1px solid #3c3c3c; padding:4px 10px;
+    margin-right:2px;border-top-left-radius:3px; border-top-right-radius:3px}
+QTabBar::tab:selected { background-color: #1e1e1e; color: #fff; border-bottom-color:#1e1e1e}
 QPushButton { background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 6px 12px; color: #e0e0e0; }
-QPushButton:hover { background-color: #4d4d4d; }
+QPushButton:hover {
+    background-color: #1aa0d9; color: #ffffff;
+}
 QPushButton:checked { background-color: #0078d4; }
-QComboBox { background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 4px 8px; color: #e0e0e0; }
-QComboBox QAbstractItemView { background-color: #2d2d2d; selection-background-color: #0078d4; }
-QSpinBox, QDoubleSpinBox { background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 4px; color: #e0e0e0; }
+QLineEdit, QSpinBox, QComboBox, QDoubleSpinBox { background-color: #484848; border: 1px solid #3f3f46; border-radius: 3px;
+    padding: 4px; color: #ffffff; selection-background-color: #264f78;
+    height: 15px}
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border: 1px solid #009de0;
+}
+/*QComboBox{padding-right: 20px;}*/
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+QComboBox::down-arrow {
+    width: 0px; height: 0px;
+    border-left: 4px solid #484848;
+    border-right: 4px solid #484848;
+    border-top: 5px solid #ffffff;
+    margin-right: 5px;
+}
+QComboBox QAbstractItemView {
+    background-color: #2d2d30; color: #ffffff;
+    selection-background-color: #094771;
+    border: 1px solid #3f3f46;
+}
+/* --- SCROLLBAR STYLING --- */
+QComboBox QAbstractItemView QScrollBar:vertical {
+    border: none; background: #737475;
+    width: 10px; margin: 0px 0px 0px 0px;
+}
+/* Handle */
+QComboBox QAbstractItemView QScrollBar::handle:vertical {
+    background: #888; min-height: 20px; border-radius: 5px;
+}
+/* Handle hover */
+QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {
+    background: #555;
+}
+/* Remove arrows */
+QComboBox QAbstractItemView QScrollBar::add-line:vertical, 
+QComboBox QAbstractItemView QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+/* The Main Box */
+QSpinBox, QDoubleSpinBox {
+    background-color: #2d2d2d; color: #ffffff;
+    border: 1px solid #555555; border-radius: 4px;
+    padding-right: 5px; /* Leave space for buttons */
+    selection-background-color: #444444;
+}
+/* The Buttons Container */
+QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button  {
+    background-color: #3d3d3d;
+    border-left: 1px solid #555555;
+    width: 20px;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #4d4d4d;
+}
+/* The Arrows (Triangle Hack) */
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    width: 0px; height: 0px; border-left: 4px solid #3d3d3d;
+    border-right: 4px solid #3d3d3d; border-bottom: 5px solid #ffffff;
+}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    width: 0px; height: 0px; border-left: 4px solid #3d3d3d;
+    border-right: 4px solid #3d3d3d; border-top: 5px solid #ffffff;
+}
+QStatusBar{background:#252526}
 QDockWidget::title { background-color: #2d2d2d; padding: 6px; }
 QScrollArea { border: none; }
 QSlider::groove:horizontal { height: 6px; background: #3d3d3d; border-radius: 3px; }
@@ -112,17 +181,23 @@ class ControlTab(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
-        
-        dev_group = QGroupBox("Device")
-        dev_layout = QHBoxLayout(dev_group)
+
+        dev_layout = QHBoxLayout()
+        dev_layout.addWidget(QLabel("Device"))
         self.device_combo = QComboBox()
         self.device_combo.currentTextChanged.connect(self._on_device_changed)
         dev_layout.addWidget(self.device_combo, stretch=1)
-        self.refresh_btn = QToolButton()
-        self.refresh_btn.setText("🔄")
+        
+        self.refresh_btn = QPushButton()
+        self.refresh_btn.setStyleSheet("""
+            QPushButton {background-color: #484848; color: #ffffff; padding: 2px 2px;}
+            QPushButton:hover {background-color: #009de0; color: #ffffff;}
+        """)
+        self.refresh_btn.setFixedSize(25, 28)
+        self.refresh_btn.setText("↻")
         self.refresh_btn.clicked.connect(self._refresh_devices)
         dev_layout.addWidget(self.refresh_btn)
-        layout.addWidget(dev_group)
+        layout.addLayout(dev_layout)
         
         acq_group = QGroupBox("Acquisition")
         acq_layout = QGridLayout(acq_group)
@@ -167,10 +242,13 @@ class ControlTab(QWidget):
         self.remove_chan_btn = QPushButton("- Remove")
         self.remove_chan_btn.clicked.connect(self._remove_channel)
         chan_btn_layout.addWidget(self.remove_chan_btn)
+        # chan_btn_layout.addStretch()
         self.chan_layout.addLayout(chan_btn_layout)
+
         self.chan_scroll = QScrollArea()
         self.chan_scroll.setWidgetResizable(True)
-        self.chan_scroll.setMaximumHeight(180)
+        self.chan_scroll.setMinimumHeight(100)
+        self.chan_scroll.setMaximumHeight(250)
         self.chan_container = QWidget()
         self.chan_container_layout = QVBoxLayout(self.chan_container)
         self.chan_container_layout.setContentsMargins(0, 0, 0, 0)
@@ -178,6 +256,7 @@ class ControlTab(QWidget):
         self.chan_layout.addWidget(self.chan_scroll)
         layout.addWidget(chan_group)
         
+        layout.addStretch()
         display_group = QGroupBox("Display")
         display_layout = QGridLayout(display_group)
         display_layout.addWidget(QLabel("Scope"), 0, 0)
@@ -196,7 +275,7 @@ class ControlTab(QWidget):
         self.clear_trends_btn.setStyleSheet("background-color: #5a3d2d;")
         display_layout.addWidget(self.clear_trends_btn, 1, 2, 1, 2)
         layout.addWidget(display_group)
-        layout.addStretch()
+        
         
         self._refresh_devices()
         self._add_channel()
@@ -643,8 +722,8 @@ class TriggerClockTab(QWidget):
         layout.setSpacing(8)
         
         # === TRIGGER SECTION ===
-        trigger_group = QGroupBox("Trigger")
-        trigger_layout = QGridLayout(trigger_group)
+        # trigger_group = QGroupBox("Trigger")
+        trigger_layout = QGridLayout()
         
         # Trigger Mode
         trigger_layout.addWidget(QLabel("Mode"), 0, 0)
@@ -694,7 +773,7 @@ class TriggerClockTab(QWidget):
         
         trigger_layout.addWidget(self.pause_trigger_group, 2, 0, 1, 2)
         
-        layout.addWidget(trigger_group)
+        layout.addLayout(trigger_layout)
         
         # === SAMPLE CLOCK SECTION ===
         clock_group = QGroupBox("Sample Clock")
@@ -748,7 +827,7 @@ class TriggerClockTab(QWidget):
         external_layout.addWidget(QLabel("Sa/s"), 2, 2)
         
         # Note about external clock rate
-        ext_note = QLabel("Note: Enter the expected external clock frequency.\nUsed for FFT resolution and time axis scaling.")
+        ext_note = QLabel("Note: Enter the expected external clock frequency. Used for FFT resolution and time axis scaling.")
         ext_note.setStyleSheet("color: #888; font-size: 10px;")
         ext_note.setWordWrap(True)
         external_layout.addWidget(ext_note, 3, 0, 1, 3)
@@ -1144,7 +1223,7 @@ class ScopeViewerV2(QMainWindow):
         # Common controls at top (Run/Stop, Single, Mode selector)
         common_group = QGroupBox()
         common_layout = QVBoxLayout(common_group)
-        common_layout.setContentsMargins(8, 8, 8, 8)
+        common_layout.setContentsMargins(4, 4, 4, 4)
         
         # Run/Stop and Single buttons in a row
         btn_layout = QHBoxLayout()

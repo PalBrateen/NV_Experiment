@@ -17,23 +17,42 @@
 #   - Save: Saved_Data/YYYY-MM-DD/meas_NNN/ with data + metadata
 #   - Default autosave ON, per-run overwrite (crash-safe)
 # =============================================================================
+# TODO: Instruments: SG not turning ON at measurement start...
+# TODO: Plot: only signal is plotted. Where is the reference?
+# TODO: Plot: the contrast is calculated to 1. Why?
+# TODO: Plot: plot the current lines as bold and then decrease the linewidth on completion
+# TODO: Plot: switch off the grids of at least one axis
+# TODO: Plot: Legends only available for the 1st signal plot. Why?
+# TODO: Plot: Introduce separate legends (separate locations) for left and right axis. Possible?
+# TODO: Plot: Change the left axis of the sweep plot to have mV, uV, kV, MV as in DAQ Scope instead of exponents.
+# TODO: Session: The tree view line highlight color is bad - blue and black.
+# TODO: Session: The parameters does not update on changing the `control_daq_sequences.py` file. The plot does not change. Needs Session Manager restart. Why?
+# TODO: Session: Save after run without autosave ON - run a save command via the console??? Save the corresponding experiment variable.
+# TODO: Expt: What is needed for counter measurements. Try on 09-Jun-26 (?) and check.
+# TODO: Config: ai/ao_channels, ai/ao_voltage_ranges not saved
+# TODO: Expt: Timeseries not updating the plot realtime (both panels). Also, no data is acquired.
+# TODO: Plot: Timeseries plot axis displays Contrast on both sides. Rectify.
+# TODO: Session: console sometimes shows 'QCoreApplication::exec: The event loop is already running'
+# TODO: Save: save folder does not work properly. Several problems: non-existent folder not created w/o user intervention - should be auto-created if does not exist. Examples: <<TS saved → meas_data_001\ts_data_001.npz (98,000 samples)>> without folder creation, <<TS saved → D:\Brateen\Saved_Data\2026-06-09\meas_data_002\ts_data_002.npz (98,000 samples)>> with folder created by user.
+# TODO: Save: seems several problems in _make_folder_number()! Check.. Search with 'dd = Path' to locate problems.
+# TODO: Save: typical data file name: data_data_012.npy. Remove the redundant 'data'...
+# TODO: Session: PBgui: either eject PB and reacquire after GUI close, or, start in same process, as a different thread...
+# TODO: Pause trigger not included.
 
-import sys, time, json, glob, importlib, traceback, subprocess, os
+import sys, time, json, glob, importlib, traceback, subprocess, os, ctypes, numpy as np, pyqtgraph as pg, shutil
 from typing import Optional, List, Dict, Tuple
-import numpy as np
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-
+from ctypes import wintypes
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QComboBox, QCheckBox, QStatusBar,
+    QLabel, QPushButton, QComboBox, QCheckBox, QStatusBar, QFileDialog, QFrame,
     QLineEdit, QMessageBox, QTabWidget, QTreeWidget, QSizePolicy,
     QTreeWidgetItem, QHeaderView, QSpinBox, QGroupBox, QButtonGroup, QGridLayout
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QPropertyAnimation, Property, QEasingCurve
-from PySide6.QtGui import QColor, QPainter, QBrush, QPalette
-import pyqtgraph as pg
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QPropertyAnimation, Property, QEasingCurve, QUrl, QDir
+from PySide6.QtGui import QColor, QPainter, QBrush, QPalette, QIcon, QDesktopServices
 
 from SGcontrol import SignalGenerator, SignalGenerator_sim
 from PBcontrol import PulseBlaster
@@ -52,16 +71,36 @@ except ImportError:
 _PAL = ['#4ec9b0', '#569cd6', '#dcdcaa', '#ce9178', '#c586c0',
         '#9cdcfe', '#d7ba7d', '#b5cea8', '#f44747', '#6a9955']
 
-STATEFILE_DIRECTORY = r'D:\Brateen\Saved_Data\SavedStates\SessionStates'  # Default working directory for state files
+DEFAULT_STATE_DIRECTORY = r'D:\Brateen\Saved_Data\SavedStates\SessionStates'  # Default working directory for state files
 DEFAULT_STATE_FILE = 'last_state.json'
-SAVE_DIRECTORY = r'D:\Brateen\Saved_Data'
-EXPERIMENT_FILE_DIRECTORY = r'D:\Brateen\NV_Experiment'
+DEFAULT_SAVE_DIRECTORY = r'D:\Brateen\Saved_Data'
+DEFAULT_EXPERIMENT_DIRECTORY = r'D:\Brateen\NV_Experiment'
 
 def _pen(idx, alpha=255, width=1.5, dash=False):
     c = pg.mkColor(_PAL[idx % len(_PAL)])
     c.setAlpha(alpha)
     style = Qt.PenStyle.DashLine if dash else Qt.PenStyle.SolidLine
     return pg.mkPen(c, width=width, style=style)
+
+user32 = ctypes.windll.user32   # Load user32.dll
+# Callback function type for EnumWindows
+EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+def bring_window_to_front(target_pid):
+    def callback(hwnd, lParam):
+        # Get the PID of the process that owns this window handle (hwnd)
+        lpdw_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(lpdw_pid))
+        
+        # If the window belongs to our target PID and is visible
+        if lpdw_pid.value == target_pid and user32.IsWindowVisible(hwnd):
+            # Bring it to front
+            user32.ShowWindow(hwnd, 5) # 5 = SW_SHOW
+            user32.SetForegroundWindow(hwnd)
+            return False  # Stop enumerating
+        return True
+
+    user32.EnumWindows(EnumWindowsProc(callback), 0)
 
 # ── clickable legend ────────────────────────────────────────────────────────
 class ClickableLegend(pg.LegendItem):
@@ -209,6 +248,18 @@ class SegmentedButton(QWidget):
                 self.setValue(i)
                 break
 
+class QHLine(QFrame):
+    def __init__(self):
+        super(QHLine, self).__init__()
+        self.setFrameShape(QFrame.Shape.HLine)
+        self.setFrameShadow(QFrame.Shadow.Sunken)
+
+class QVLine(QFrame):
+    def __init__(self):
+        super(QVLine, self).__init__()
+        self.setFrameShape(QFrame.Shape.VLine)
+        self.setFrameShadow(QFrame.Shadow.Sunken)
+
 # ── ExperimentThread ────────────────────────────────────────────────────────
 class ExperimentThread(QThread):
     # inner_idx, param_val, i_run, oc_idx, oc_vals_str, processed, raw
@@ -255,38 +306,53 @@ pg.setConfigOptions(antialias=True)
 
 # QPushButton { background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 6px 12px; color: #e0e0e0; }
 # QPushButton:hover { background-color: #4d4d4d; }
-                   
+
 _SS = """
-QMainWindow,QWidget{background-color:#1e1e1e;color:#d4d4d4;font-family:'Segoe UI',Arial,sans-serif;}
-QGroupBox{border:1px solid #3c3c3c;border-radius:4px;margin-top:8px;
-    padding-top:14px;font-weight:bold}
+QMainWindow,QWidget{font-family:'Segoe UI',Arial,sans-serif;}
+QMainWindow{background-color:#454545;color:#d4d4d4;}
+QGroupBox{border:1px solid #4a4a4a;border-radius:4px;margin-top:8px;
+    padding-top:14px;font-weight:bold; font-size:12px}
 QGroupBox::title{subcontrol-origin:margin;left:10px}
-QTabWidget::pane{border:1px solid #3c3c3c;background:#1e1e1e}
-QTabBar::tab{background:#2d2d2d; border:1px solid #3c3c3c; color: #a0a0a0;
+QTabWidget::pane{border:1px solid #555; background:#353535}
+QTabBar::tab{background:#414141; border:1px solid #555;
     padding:4px 10px; margin-right:2px; border-top-left-radius:3px;
-    border-top-right-radius:3px}
-QTabBar::tab:selected{background:#1e1e1e;border-bottom-color:#1e1e1e}
+    border-top-right-radius:3px;
+    border-bottom-color: #555;  /* Blends the bottom border into the pane below */
+}
+QTabBar::tab:selected {
+    background-color: #353535;          /* Lighter gray to show it's active */
+    border: 1px solid #555;    /* Very dark border between tabs */
+    border-bottom: None;
+    padding:4px 10px; border-top-left-radius:3px;
+    border-top-right-radius:3px;
+}
+QTabBar::tab:hover:!selected {background: #3a3a3a;}
+QTabBar {
+    background-color: #353535; /* A darker gray than the tabs to provide depth */
+    border-right: 2px solid #353535; border-left: 2px solid #353535;
+    border-top: 2px solid #353535;
+    border-radius: 1px; 
+}
 QPushButton{
-    background-color: #484848; color: #ffffff;
+    background-color: #4e4e4e; color: #ffffff;
     border: 1px solid #3c3c3c; border-radius: 4px;
     padding: 5px 14px
 }
 QPushButton:hover {
     background-color: #1aa0d9; color: #ffffff;
 }
-QPushButton:disabled {
-    color: #555;
-}
+QPushButton:disabled{background:#5e5e5e;color:#a6a6a6;}
 QPushButton:checked {
     background-color: #0078d4;
 }
 QLineEdit, QSpinBox, QComboBox {
-    background: #484848;
+    background: #4e4e4e;
     color: #ffffff;
-    border: 1px solid #3f3f46;
+    border: 1px solid #505050;
     border-radius: 3px;
     padding: 4px;
-    selection-background-color: #264f78;
+    selection-color: #fff;
+    selection-background-color: #0078d4;
 }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border: 1px solid #009de0;
@@ -302,15 +368,16 @@ QComboBox::drop-down {
 }
 QComboBox::down-arrow {
     width: 0px; height: 0px;
-    border-left: 4px solid #484848;
-    border-right: 4px solid #484848;
+    border-left: 4px solid #4e4e4e;
+    border-right: 4px solid #4e4e4e;
     border-top: 5px solid #ffffff;
     margin-right: 5px;
 }
 QComboBox QAbstractItemView {
     background-color: #2d2d30; color: #ffffff;
-    selection-background-color: #094771;
-    border: 1px solid #3f3f46;
+    selection-color: #fff;
+    selection-background-color: #0078d4; /*#094771;*/
+    border: 1px solid #505050;
 }
 /* --- SCROLLBAR STYLING --- */
 QComboBox QAbstractItemView QScrollBar:vertical {
@@ -335,7 +402,6 @@ QSpinBox {
     background-color: #2d2d2d; color: #ffffff;
     border: 1px solid #555555; border-radius: 4px;
     padding-right: 5px; /* Leave space for buttons */
-    selection-background-color: #444444;
 }
 /* The Buttons Container */
 QSpinBox::up-button, QSpinBox::down-button {
@@ -355,7 +421,6 @@ QSpinBox::down-arrow {
     width: 0px; height: 0px; border-left: 4px solid #3d3d3d;
     border-right: 4px solid #3d3d3d; border-top: 5px solid #ffffff;
 }
-QStatusBar{background:#252526}
 
 QTreeWidget{background:#252526;border:none;color:#d4d4d4}
 QTreeWidget::item:alternate{background:#2a2a2a}
@@ -379,6 +444,7 @@ QCheckBox::indicator:checked {
 
 class SessionManager(QMainWindow):
     _upd = Signal(int, float, int, int, str, object, object)
+    save_folder_changed = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -387,7 +453,7 @@ class SessionManager(QMainWindow):
         self.setStyleSheet(_SS)
 
         # Working directory for state files
-        self.statefile_directory = Path(STATEFILE_DIRECTORY)
+        self.statefile_directory = Path(DEFAULT_STATE_DIRECTORY)
         self.statefile_directory.mkdir(parents=True, exist_ok=True)
 
         self.sg = None; self.pb = None; self.ao_task = None
@@ -415,6 +481,7 @@ class SessionManager(QMainWindow):
         self._cam_contrast_vb = None      # Right-axis ViewBox for camera sweep
         self._cam_extra_plots = []        # Camera-specific dynamic plot widgets
         self.last_used_configs = ['esr_config', 'esr_camera_config']      # pos 0 - diode, pos 1 - camera
+        self.tools = {'daq':[0], 'pb':[0], 'sg':[0], 'verdi':[0]}
 
         self._build_ui()
         self._load_session_state()
@@ -425,7 +492,7 @@ class SessionManager(QMainWindow):
 
     def _build_ui(self):
         central_widget = QWidget(); self.setCentralWidget(central_widget)
-        root = QHBoxLayout(central_widget); root.setContentsMargins(4, 4, 4, 4)
+        root = QHBoxLayout(central_widget); root.setContentsMargins(4, 6, 4, 4)
 
         # Left: tabs
         self._tabs = QTabWidget()
@@ -436,9 +503,10 @@ class SessionManager(QMainWindow):
         self._tabs.addTab(self._build_metadata_tab(), "Config")
         self._tabs.addTab(self._build_console_tab(), "Console")
         self._tabs.currentChanged.connect(
-            lambda: self._tabs.setFixedWidth(500)if self._tabs.currentIndex() == 3
+            lambda: self._tabs.setFixedWidth(500) if self._tabs.currentIndex() == 3
             else self._tabs.setFixedWidth(340)
             )
+        
         root.addWidget(self._tabs)
 
         # Right: plots
@@ -461,11 +529,52 @@ class SessionManager(QMainWindow):
 
         self.status_bar = QStatusBar(); self.setStatusBar(self.status_bar)
         self.status_label = QLabel("Ready"); self.status_bar.addWidget(self.status_label, 1)
+        self.status_label.setStyleSheet("padding-right: 20px; padding-bottom: 3px; font-weight: bold")
+
+        # Save Folder status display
+        # TODO: how to update this after any change in the self.save_folder_path attribute?
+        self.save_folder_status_bar = QLabel() #f"Data Save Folder: {self.save_folder_path}")
+        self.save_folder_status_bar.setOpenExternalLinks(True) # <-- CRUCIAL: Enables clicking links
+        # Call your update method immediately to set the initial link text
+        self.update_folder_statusbar(self.save_folder_path,
+                                     suffix_str=" (Data)", method=self.save_folder_status_bar)
+        # Connect your existing signal to the update method below
+        self.save_folder_changed.connect(lambda: self.update_folder_statusbar(self.save_folder_path,
+                                                                              suffix_str=" (Data)",
+                                                                              method=self.save_folder_status_bar))
+        self.status_bar.addPermanentWidget(self.save_folder_status_bar)
+        
+        self.status_bar.addPermanentWidget(QLabel("||"))
+
+        self.experiment_folder_status_bar = QLabel() #f"Data Save Folder: {self.save_folder_path}")
+        self.experiment_folder_status_bar.setOpenExternalLinks(True) # <-- CRUCIAL: Enables clicking links
+        # Call your update method immediately to set the initial link text
+        self.update_folder_statusbar(DEFAULT_EXPERIMENT_DIRECTORY,
+                                     suffix_str=" (Expt)", method=self.experiment_folder_status_bar)
+        self.status_bar.addPermanentWidget(self.experiment_folder_status_bar)
+
+        # Make the main window able to accept focus
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+
+    def update_folder_statusbar(self, new_path: str, suffix_str: str, method):
+        """Slot that triggers automatically whenever self.save_folder_changed emits."""
+        # 1. Convert standard path string to a safe file:// URL scheme
+        file_url = QUrl.fromLocalFile(new_path).toString()
+        # 2. Build the rich text HTML link
+        file_link_html = f'<a href="{file_url}" style="color: #53bedd;">{new_path}</a>'
+        # 3. Update the permanent widget text
+        # self.save_folder_status_bar.setText(suffix_str + file_link_html)
+        method.setText(file_link_html + suffix_str)
+    
+    # When the window is clicked, clear focus from the line edit
+    def mousePressEvent(self, event):
+        self.setFocus()
+        super().mousePressEvent(event)
 
     def _build_instruments_tab(self):
         w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(6,6,6,6)
         lbl = QLabel("Instruments")
-        lbl.setStyleSheet("color: #888; font-size: 15px")
+        lbl.setStyleSheet("font-size: 15px")
         vl.addWidget(lbl)
 
         mono = "font-family:'Consolas','Courier New',monospace;font-size:12px"
@@ -495,7 +604,8 @@ class SessionManager(QMainWindow):
         cr.addWidget(self.btn_reload_modules)
         cr.addStretch()
         vl.addLayout(cr)
-        
+        vl.addWidget(QHLine())
+
         vl.addSpacing(10)
 
         instrs = ('ALL', 'SG', 'PB', 'AO', 'CAM')
@@ -553,9 +663,9 @@ class SessionManager(QMainWindow):
 
         # ── Tools ──────────────────
 
-        vl.addWidget(QLabel(""))  # spacer
+        vl.addWidget(QHLine())
         lbl = QLabel("Tools")
-        lbl.setStyleSheet("color: #888; font-size: 15px")
+        lbl.setStyleSheet("font-size: 15px")
         vl.addWidget(lbl)
         
         vl.addSpacing(2)
@@ -565,7 +675,7 @@ class SessionManager(QMainWindow):
 
         cr_sub = QVBoxLayout()
         lbl2 = QLabel("Camera (In-process):")
-        lbl2.setStyleSheet("color: #888; font-size: 11px")
+        lbl2.setStyleSheet("font-size: 11px")
         cr_sub.addWidget(lbl2)
 
         self.btn_launch_cam = QPushButton("📷 Camera Viewer")
@@ -576,7 +686,7 @@ class SessionManager(QMainWindow):
 
         cr_sub = QVBoxLayout()
         lbl2 = QLabel("Camera (Windows App):")
-        lbl2.setStyleSheet("color: #888; font-size: 11px")
+        lbl2.setStyleSheet("font-size: 11px")
         cr_sub.addWidget(lbl2)
 
         self.btn_launch_hci = QPushButton("🎥 HCImageLive")
@@ -592,7 +702,7 @@ class SessionManager(QMainWindow):
 
         # ── Subprocess — no parameter return ─────────
         lbl = QLabel("Separate process:")
-        lbl.setStyleSheet("color: #888; font-size: 11px")
+        lbl.setStyleSheet("font-size: 11px")
         vl.addWidget(lbl)
 
         tr = QHBoxLayout()
@@ -612,17 +722,17 @@ class SessionManager(QMainWindow):
         tr_sub = QVBoxLayout()
         self.btn_launch_sg_gui = QPushButton("🔧 SG GUI")
         self.btn_launch_sg_gui.setToolTip("Launch SG384gui.py in a new process")
-        self.btn_launch_sg_gui.clicked.connect(lambda: self._launch_tool('SG384gui.py'))
+        self.btn_launch_sg_gui.clicked.connect(lambda: self._launch_tool('sg384_gui.py'))
         tr_sub.addWidget(self.btn_launch_sg_gui)
 
         self.btn_launch_verdi_gui = QPushButton("🔦 Verdi GUI")
         self.btn_launch_verdi_gui.setToolTip("Launch verdi_gui.py in a new process")
-        self.btn_launch_verdi_gui.clicked.connect(lambda: self._launch_tool('verdi_gui.py'))
+        self.btn_launch_verdi_gui.clicked.connect(lambda: self._launch_tool('verdi_v5_gui.py'))
         tr_sub.addWidget(self.btn_launch_verdi_gui)
         tr.addLayout(tr_sub)
         tr.addStretch()
         vl.addLayout(tr)
-
+        
         # ── Session state save/load ─────────────────────────────────
         vl.addStretch()
         self._build_state_controls(vl)
@@ -630,12 +740,15 @@ class SessionManager(QMainWindow):
         return w
     
     def _refresh_config_file_list(self, script_file:str=''):
+        if script_file == '':
+            script_file = self.cb_scr.currentText()
+        
         self.config_files = [file.stem
-                             for file in list(Path.glob(Path(EXPERIMENT_FILE_DIRECTORY),
+                             for file in list(Path.glob(Path(DEFAULT_EXPERIMENT_DIRECTORY),
                                                         '*_config.py'))
                             ]
         self.config_files.remove('experiment_config')
-
+        
         if 'camera' in script_file:
             self.config_files = [file if 'camera' in file else '' for file in self.config_files]
             self.config_files = list(filter(lambda x: x != '', self.config_files))
@@ -652,6 +765,7 @@ class SessionManager(QMainWindow):
             self.cb_cfg.setCurrentText(self.last_used_configs[0])
         elif 'camera' in script_file:
             self.cb_cfg.setCurrentText(self.last_used_configs[1])
+        # print(f"_update_config_file_display(): {self.cb_cfg.currentText()}")
 
     def _update_config_file_list(self):
         script_file = self.cb_scr.currentText()
@@ -664,15 +778,51 @@ class SessionManager(QMainWindow):
         self._update_config_file_display()
     
     def _refresh_script_file_list(self):
-        self.script_files = [file.stem
-                             for file in list(Path.glob(Path(EXPERIMENT_FILE_DIRECTORY),
-                                                        'mainControl_*.py'))
-                            ]
+        self.script_files = [file.stem for file in
+                             list(Path.glob(Path(DEFAULT_EXPERIMENT_DIRECTORY), 'mainControl_*.py'))]
     
     def _update_script_list_display(self):
         self.cb_scr.clear()  # Clear old items
         self.cb_scr.addItems(self.script_files)
+    
+    def _make_new_folder(self, folder_path):
+        folder_path = Path(folder_path)
+        if not folder_path.exists():
+            folder_path.mkdir(parents=True, exist_ok=True)
 
+        self.assign_save_folder(str(folder_path))
+
+    def assign_save_folder(self, folder_path = ''):
+        folder_path = Path(folder_path)
+        
+        if folder_path.exists():
+            self.save_folder.setStyleSheet("""color:#fff; """)   # color:#2fff00
+            self.save_folder_path = str(folder_path)
+        else:
+            self.save_folder.setStyleSheet("""color:#ff0000; """)
+            self.save_folder_path = ''
+        self.save_folder_changed.emit(self.save_folder_path)
+    
+    def browse_folder(self):
+        dialog = QFileDialog(self, "Select Folder")
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        dialog.setDirectory(DEFAULT_SAVE_DIRECTORY)
+        dialog.setViewMode(QFileDialog.ViewMode.Detail)
+        presets = [ # Define preset URLs
+            QUrl.fromLocalFile(DEFAULT_SAVE_DIRECTORY),
+            QUrl.fromLocalFile(DEFAULT_EXPERIMENT_DIRECTORY),
+        ]
+        dialog.setSidebarUrls(presets)      # Add to the sidebar
+        if dialog.exec():
+            folder = dialog.selectedFiles()[0]
+            self.save_folder.setText(folder)
+        
+        # Either above (without native dialog) or the below commented part (with Windows native dialog)...
+        # folder = QFileDialog.getExistingDirectory(self, "Select Folder", DEFAULT_SAVE_DIRECTORY)
+        # if folder:
+        #     self.save_folder.setText(folder)
+    
     def _build_experiment_tab(self):
         w = QWidget()
         
@@ -682,7 +832,7 @@ class SessionManager(QMainWindow):
         config_grp = QGroupBox("Experiment Config")
         config_grp.setStyleSheet(
             "QGroupBox {"
-            "border: 1px solid #3c3c3c; border-radius: 3px;"
+            "border-radius: 3px;"
             "margin-top: 6px; padding-top: 14px }"
             "QGroupBox::title {"
             "subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px}")
@@ -694,9 +844,9 @@ class SessionManager(QMainWindow):
         self.cb_cfg = QComboBox()
         r1_sub.addWidget(self.cb_cfg)
 
-        self.open_config = QPushButton("📝")
+        self.open_config = QPushButton("🖋")
         self.open_config.setStyleSheet("""
-            QPushButton {background-color: #484848; color: #ffffff; padding: 2px 2px;}
+            QPushButton {padding: 2px 2px;}
             QPushButton:hover {background-color: #009de0; color: #ffffff;}
         """)
         self.open_config.setFixedSize(25, 28)
@@ -707,12 +857,12 @@ class SessionManager(QMainWindow):
         # Refresh button inline with combo
         self.refresh_config_btn = QPushButton('↻')
         self.refresh_config_btn.setStyleSheet("""
-            QPushButton {background-color: #484848; color: #ffffff; padding: 2px 2px;}
-            QPushButton:hover {background-color: #009de0; color: #ffffff;}
+            QPushButton {padding: 2px 2px;}
+            QPushButton:hover {background-color: #009de0; color: #ffffff; padding: 2px}
         """)
         self.refresh_config_btn.setFixedSize(25, 28)
         self.refresh_config_btn.setToolTip("Refresh config list")
-        self.refresh_config_btn.clicked.connect(self._refresh_config_file_list)
+        self.refresh_config_btn.clicked.connect(lambda: self._refresh_config_file_list())
         r1_sub.addWidget(self.refresh_config_btn)
         r1.addLayout(r1_sub)
         r1.addSpacing(5)
@@ -752,7 +902,7 @@ class SessionManager(QMainWindow):
         vl.addSpacing(10)
         control_grp = QGroupBox("Experiment Config")
         control_grp.setStyleSheet("""
-            QGroupBox {border: 1px solid #3c3c3c; border-radius: 3px;
+            QGroupBox {border-radius: 3px;
             margin-top: 6px; padding-top: 14px}
             QGroupBox::title {subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px}""")
         
@@ -767,7 +917,7 @@ class SessionManager(QMainWindow):
 
         self.open_script = QPushButton("🖋")
         self.open_script.setStyleSheet("""
-            QPushButton {background-color: #484848; color: #ffffff; padding: 2px 2px;}
+            QPushButton {padding: 2px 2px;}
             QPushButton:hover {background-color: #009de0; color: #ffffff;}
         """)
         self.open_script.setFixedSize(25, 28)
@@ -778,7 +928,7 @@ class SessionManager(QMainWindow):
         # Refresh button inline with combo
         self.refresh_script_btn = QPushButton('↻')
         self.refresh_script_btn.setStyleSheet("""
-            QPushButton {background-color: #484848; color: #ffffff; padding: 2px 2px;}
+            QPushButton {padding: 2px 2px;}
             QPushButton:hover {background-color: #009de0; color: #ffffff;}
         """)
         self.refresh_script_btn.setFixedSize(25, 28)
@@ -821,8 +971,7 @@ class SessionManager(QMainWindow):
         vl.addSpacing(10)
         plot_grp = QGroupBox("Experiment Plot")
         plot_grp.setStyleSheet("""
-            QGroupBox {
-            border: 1px solid #3c3c3c; border-radius: 3px;"
+            QGroupBox {border-radius: 3px;
             margin-top: 6px; padding-top: 14px }
             QGroupBox::title {
             subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px}""")
@@ -853,11 +1002,29 @@ class SessionManager(QMainWindow):
         # ── Autosave section (HCImageLive-style) ────────────────────        
         save_grp = QGroupBox("Save")
         save_grp.setStyleSheet("""
-            QGroupBox{border:1px solid #3c3c3c;border-radius:3px;
+            QGroupBox{border-radius:3px;
             margin-top:6px;padding-top:14px}
             QGroupBox::title{subcontrol-origin:margin;
             subcontrol-position:top left;padding:0 4px}""")
         sg_l = QVBoxLayout(save_grp)
+
+        save_folder_layout = QHBoxLayout()
+        save_folder_layout.addWidget(QLabel("Folder"))
+        folder = Path(DEFAULT_SAVE_DIRECTORY) / time.strftime("%Y-%m-%d")
+        self.save_folder = QLineEdit(str(folder)); self.save_folder.end(False)
+        self.save_folder.textChanged.connect(lambda: self.assign_save_folder(self.save_folder.text()))
+        self.assign_save_folder(self.save_folder.text())
+        save_folder_layout.addWidget(self.save_folder)
+
+        self.make_new_folder = QPushButton("⭐")
+        self.make_new_folder.setStyleSheet("QPushButton{border-radius: 4px;padding: 5px 1px}")
+        self.make_new_folder.clicked.connect(lambda: self._make_new_folder(self.save_folder.text()))
+        save_folder_layout.addWidget(self.make_new_folder)
+        self.browse_btn = QPushButton("...")
+        self.browse_btn.setStyleSheet("QPushButton{border-radius: 4px;padding: 5px 5px}")
+        self.browse_btn.clicked.connect(self.browse_folder)
+        save_folder_layout.addWidget(self.browse_btn)
+        sg_l.addLayout(save_folder_layout)
 
         save_text = QHBoxLayout()
         r_prefix = QVBoxLayout()
@@ -936,14 +1103,18 @@ class SessionManager(QMainWindow):
 
         chk_save = QHBoxLayout()
         chk_save.addWidget(QLabel("Autosave"))
-        self.chk_save = ToggleSwitch(); self.chk_save.setChecked(True)
-        chk_save.addWidget(self.chk_save)
+        self.chk_autosave = ToggleSwitch(); self.chk_autosave.setChecked(True)
+        # self.chk_autosave.stateChanged.connect(self._on_toggle_autosave)
+        self.chk_autosave.stateChanged.connect(lambda:
+                                               self.save_data_manually.setEnabled(
+                                                   not self.chk_autosave.isChecked()))
+        chk_save.addWidget(self.chk_autosave)
         chk_save.addStretch()
 
-        self.save_data_manually = QPushButton("Save Data")
+        self.save_data_manually = QPushButton("Save Data"); self.save_data_manually.setEnabled(False)
         self.save_data_manually.setFixedSize(100, 45)
         self.save_data_manually.setToolTip("Save Data when Autosave is OFF.\nBut how to save? Autosave saves after each run!")
-        # self.save_data_manually.clicked.connect(self._launch_camera_viewer)   # TODO: wire this
+        # self.save_data_manually.clicked.connect(self._manual_save_data)   # TODO: wire manual data save
         chk_save.addWidget(self.save_data_manually)
         sg_l.addLayout(chk_save)
 
@@ -956,7 +1127,7 @@ class SessionManager(QMainWindow):
             QPushButton{background:#0e639c;font-weight:bold;
             font-size:14px;padding:8px}
             QPushButton:hover{background:#1177bb;}
-            QPushButton:disabled{background:#333;color:#666;}""")
+            QPushButton:disabled{background:#5e5e5e;color:#a6a6a6;}""")
         self.btn_run.clicked.connect(self._run_experiment)
         self.btn_run.setEnabled(False)
         r2.addWidget(self.btn_run)
@@ -1011,7 +1182,7 @@ class SessionManager(QMainWindow):
             editor_path = r"%USERPROFILE%\AppData\Local\spyder-6\envs\spyder-runtime\Scripts\spyder.exe"
         else:
             editor_path = 'notepad.exe'
-        clean_path = os.path.normpath((Path(EXPERIMENT_FILE_DIRECTORY) / file).with_suffix('.py'))
+        clean_path = os.path.normpath((Path(DEFAULT_EXPERIMENT_DIRECTORY) / file).with_suffix('.py'))
         
         try:
             if editor == 'vscode':
@@ -1055,7 +1226,7 @@ class SessionManager(QMainWindow):
         if not _HAS_QTCONSOLE:
             lbl = QLabel("qtconsole not installed.\n"
                          "pip install qtconsole ipykernel")
-            lbl.setStyleSheet("color:#888;padding:20px")
+            lbl.setStyleSheet("padding:20px")
             lbl.setAlignment(Qt.AlignCenter)
             vl.addWidget(lbl)
             return w
@@ -1192,6 +1363,7 @@ class SessionManager(QMainWindow):
             self._ipy_widget.execute(
                 'import numpy as np, matplotlib.pyplot as plt, matplotlib\n'
                 'matplotlib.use("QtAgg")    # Force the backend to Qt\n'
+                'plt.style.use("dark_background")\n'
                 # If you want to switch back to inline later:
                 # matplotlib.use('module://matplotlib_inline.backend_inline')
                 'print("\\033[96m" + "─"*44 + "\\033[0m")\n'
@@ -1281,6 +1453,9 @@ class SessionManager(QMainWindow):
     def _update_seq_btns(self):
         # self.btn_view_seq.setEnabled(self._pb_ready)
         self.btn_play_seq.setEnabled(self._pb_ready)
+
+    def _on_toggle_autosave(self):
+        self.save_data_manually.setEnabled(not self.chk_autosave.isChecked())
 
     def _set_running_state(self, running: bool):
         """Toggle UI buttons for running/idle state."""
@@ -1451,13 +1626,13 @@ class SessionManager(QMainWindow):
                 except Exception as e:
                     failed.append(f"{name}: {e}")
 
-        msg = f"✔ Reloaded {len(reloaded)} modules"
+        msg = f"✔ Reloaded: {', '.join(reloaded)}"
         if failed:
-            msg += f"  ⚠ {len(failed)} failed"
-            for f in failed:
-                print(f"  ❌ {f}")
+            msg += f"  ⚠ {', '.join(failed)} failed"
+            # for f in failed:
+            #     print(f"  ❌ {f}")
         self.status_label.setText(msg)
-        print(f"  Reloaded: {', '.join(reloaded)}")
+        # print(f"  Reloaded: {', '.join(reloaded)}")
 
     # ── TOOL LAUNCHERS (subprocess — fire and forget) ──────────────
 
@@ -1467,28 +1642,37 @@ class SessionManager(QMainWindow):
         The child process is fully independent — it manages its own
         DAQ tasks, PB connection, etc.  No parameter return needed
         for DAQ Scope or PB GUI (they don't modify session state).
-
-        For camera viewer (future), use in-process launch instead
-        so the session can read back exposure/ROI on close.
         """
-        script = Path(script_name)
-        if not script.exists():
-            # Try common locations
-            for candidate in [Path('.') / script_name,
-                              Path('scope_v2') / script_name,
-                              Path('..') / script_name]:
-                if candidate.exists():
-                    script = candidate
-                    break
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, str(script)],
-                cwd=str(script.parent) if script.parent != Path('.') else None,
-            )
-            self.status_label.setText(f"✔ Launched {script_name} (PID {proc.pid})")
-        except Exception as e:
-            self.status_label.setText(f"❌ Launch {script_name}: {e}")
+        # FIXME: it requires clicking twice after closing. Fix it!
+        for tool in self.tools:
+            candidate = Path(f'{DEFAULT_EXPERIMENT_DIRECTORY}/gui/{tool}') / script_name
+            if candidate.exists():
+                script = candidate
+                break
+        
+        if not 1 in self.tools[tool]:
+            self.tools[tool] = [1]
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, str(script)],
+                    cwd=str(script.parent) if script.parent != Path('.') else None,
+                )
+                self.tools[tool].append(proc)
+                self.status_label.setText(f"✔ Launched {script_name} (PID {proc.pid})")
+            except Exception as e:
+                self.status_label.setText(f"❌ Launch {script_name}: {e}")
 
+        else:
+            status = self.tools[tool][-1].poll()    # Check process status
+
+            if status is None:
+                # print("Process is still running.")
+                bring_window_to_front(self.tools[tool][-1].pid)
+            else:
+                self.tools[tool] = [0]
+                print(f"Process has terminated with return code: {status}")
+        
+        # print(self.tools)
     # ════════════════════════════════════════════════════════════════
     #  CAMERA VIEWER (in-process — can read back settings)
     # ════════════════════════════════════════════════════════════════
@@ -1515,7 +1699,10 @@ class SessionManager(QMainWindow):
                 self._camera_viewer = None
 
         try:
+            camera_dir = os.path.abspath(rf'{DEFAULT_EXPERIMENT_DIRECTORY}/gui/camera')
+            sys.path.append(camera_dir)
             from cam_v2_main import CameraViewerV2
+
             self._camera_viewer = CameraViewerV2()
             self._camera_viewer.setWindowTitle("Camera Viewer v2 — Session")
             self._camera_viewer.setAttribute(
@@ -1568,7 +1755,6 @@ class SessionManager(QMainWindow):
 
     def _find_hcimagelive(self) -> Optional[str]:
         """Find HCImageLive.exe on the system."""
-        import shutil
         for p in self._HCIMAGELIVE_PATHS:
             if Path(p).exists():
                 return p
@@ -1770,10 +1956,12 @@ class SessionManager(QMainWindow):
         Creates Saved_Data/YYYY-MM-DD/meas_{folder_number}/ directory.
         Auto-bumps the number if a collision is detected.
         """
-        if not self.chk_save.isChecked():
+        if not self.chk_autosave.isChecked():
             return None, None
+        # TODO: Custom folder to save..
         fn = self._make_folder_number(bump_on_collision=True)
-        dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
+        # dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
+        dd = Path(self.save_folder_path)
         dd.mkdir(parents=True, exist_ok=True)
         sp = dd / f"meas_{fn}"; sp.mkdir(exist_ok=True)
         self._last_save_path = sp
@@ -1866,16 +2054,16 @@ class SessionManager(QMainWindow):
     def _build_state_controls(self, parent_layout: QVBoxLayout):
         """Add state save/load controls to the instruments tab."""
 
-        parent_layout.addWidget(QLabel(""))  # spacer
+        parent_layout.addWidget(QHLine())  # spacer
 
         r1 = QHBoxLayout()
         lbl = QLabel("Session State")
-        lbl.setStyleSheet("color: #888; font-size: 15px")
+        lbl.setStyleSheet("font-size: 15px")
         r1.addWidget(lbl)
 
         btn_save_st = QPushButton('Save')
         btn_save_st.setStyleSheet("""
-            QPushButton {background-color: #d3dbde; color: #484848; font-size: 13px}
+            QPushButton {font-size: 13px}
             QPushButton:hover {background-color: #009de0;color: #ffffff;}
         """)
         btn_save_st.setFixedSize(60, 30)
@@ -1884,7 +2072,7 @@ class SessionManager(QMainWindow):
 
         btn_load_st = QPushButton('Load')
         btn_load_st.setStyleSheet("""
-            QPushButton {background-color: #484848; color: #ffffff; font-size: 13px}
+            QPushButton {font-size: 13px}
             QPushButton:hover {background-color: #009de0;}
         """)
         btn_load_st.setFixedSize(60, 30)
@@ -1901,10 +2089,19 @@ class SessionManager(QMainWindow):
             "contrast op, window geometry, instrument sim flag.")
         r1.addWidget(self.state_combo)
 
+        open_folder_btn = QPushButton("...")
+        open_folder_btn.setFixedSize(25, 25)
+        open_folder_btn.setStyleSheet("""
+            QPushButton {padding: 2px 2px;}
+            QPushButton:hover {background-color: #009de0; color: #ffffff;}
+        """)
+        open_folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(DEFAULT_STATE_DIRECTORY)))
+        r1.addWidget(open_folder_btn)
+
         # Refresh button inline with combo
         refresh_btn = QPushButton('↻')
         refresh_btn.setStyleSheet("""
-            QPushButton {background-color: #484848; color: #ffffff; padding: 2px 2px;}
+            QPushButton {padding: 2px 2px;}
             QPushButton:hover {background-color: #009de0; color: #ffffff;}
         """)
         refresh_btn.setFixedSize(25, 28)
@@ -1956,7 +2153,7 @@ class SessionManager(QMainWindow):
                 'mode': self.cb_mode.currentText(),
                 'contrast_op': self.cb_contrast.currentText(),
                 'realtime_plot': self.chk_rt.isChecked(),
-                'autosave_enabled': self.chk_save.isChecked(),
+                'autosave_enabled': self.chk_autosave.isChecked(),
                 'autosave_prefix': self.txt_prefix.text(),
                 'autosave_start_num': self.spin_autosave_num.value(),
                 'autosave_suffix': self.txt_suffix.text(),
@@ -2010,7 +2207,7 @@ class SessionManager(QMainWindow):
             self.cb_mode.setCurrentText(state.get('mode', 'Sweep'))
             self.cb_contrast.setCurrentText(state.get('contrast_op', 's/r'))
             self.chk_rt.setChecked(state.get('realtime_plot', True))
-            self.chk_save.setChecked(state.get('autosave_enabled', True))
+            self.chk_autosave.setChecked(state.get('autosave_enabled', True))
             self.txt_prefix.setText(state.get('autosave_prefix', 'data'))
             self.spin_autosave_num.setValue(
                 state.get('autosave_start_num', 1))
@@ -2044,9 +2241,17 @@ class SessionManager(QMainWindow):
     def _on_config_load(self):
         # self._tabs.setCurrentIndex(2)
         self._tabs.tabBar().setTabTextColor(2, QColor("#00ff00"))
+        # self._tabs.tabBar().setStyleSheet(
+        #     "QTabBar::tab:nth-child(3) { color: #00ff00; }"
+        # )
         QTimer.singleShot(5000,
-                          lambda: self._tabs.tabBar().setTabTextColor(2, QColor("#ffffff")))
-    
+                        #   lambda: self._tabs.tabBar().setStyleSheet(
+                        #         "QTabBar::tab:nth-child(3) { color: #ffffff; }"
+                        #     )
+                          lambda: self._tabs.tabBar().setTabTextColor(2, QColor("#ffffff"))
+                          )
+        # self._tabs.tabBar().setTabTextColor(2, QColor("#00ff00"))
+
     def _ensure_config(self):
         cn = self.cb_cfg.currentText()
         if self._loaded_config is None or self._loaded_config_name != cn:
@@ -2642,7 +2847,9 @@ class SessionManager(QMainWindow):
             self._is_camera_run = False
         self._push_namespace()
         self._clear_comment_field()
-
+        # Enable manual data save pushbutton
+        self.save_data_manually.setEnabled(not self.chk_autosave.isChecked())
+    
     @Slot(str)
     def _on_err(self, tb):
         self._set_running_state(False)
@@ -2981,7 +3188,7 @@ class SessionManager(QMainWindow):
 
     def closeEvent(self, ev):
         self._save_session_state()
-
+        print(self.last_used_configs)
         if self.is_running:
             r = QMessageBox.question(self, "Running", "Stop and quit?",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -3058,11 +3265,16 @@ def set_dark_theme(app):
     app.setPalette(dark_palette)
 
 def main():
+    myappid = 'aglab.session_man'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     app = QApplication.instance() or QApplication(sys.argv)
     # Apply dark theme to entire application
     set_dark_theme(app)
 
     win = SessionManager()
+    app_icon = QIcon(DEFAULT_EXPERIMENT_DIRECTORY + r"\session_manager_icon.png")
+    win.setWindowIcon(app_icon)
+    app.setWindowIcon(app_icon) # Sets it for the whole application
     win.show()
     sys.exit(app.exec())
 

@@ -13,6 +13,7 @@ Features:
 Author: Lab Control System
 """
 # TODO: interface should show the latest change in the status bar temporary error display area
+# TODO: when run, the file runs from a different folder while the session.py runs correctly... why? Same with pyPBLV.py. Also the python environment selected by default is not NV_py3.12...
 
 import sys, re, ctypes, json, os
 from pathlib import Path
@@ -24,13 +25,12 @@ from PySide6.QtWidgets import (
     QGroupBox, QFrame, QStatusBar, QSizePolicy, QSpacerItem,
     QToolButton, QStyle, QScrollArea, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal, Slot, QTimer, QSize
-from PySide6.QtGui import QPalette, QColor, QFont, QIcon, QPainter, QFontMetrics
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QSize, QUrl
+from PySide6.QtGui import QPalette, QColor, QFont, QIcon, QPainter, QFontMetrics, QDesktopServices
 
-expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')     # absolute path to the directory
-sys.path.append(expt_dir)   # Add to sys.path
-# Import the module as if it were in the current directory
-from SGcontrol import SignalGenerator, ModulationFunction, ModulationType, SGDISPLAY, ErrorCodes
+expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')    #absolute path to the directory containing the module
+sys.path.append(expt_dir)      # Add the directory to sys.path
+from SGcontrol import SignalGenerator, ModulationFunction, ModulationType, SGDISPLAY, ErrorCodes    # Import the module
 
 # =============================================================================
 # CONFIGURATION
@@ -927,7 +927,6 @@ class AuxOutputSection(QWidget):
         
         layout.addStretch()
 
-
 # =============================================================================
 # MAIN WINDOW
 # =============================================================================
@@ -968,6 +967,7 @@ class SG384ControlPanel(QMainWindow):
         
         # Refresh state files list
         self._refresh_state_files()
+        self._load_state()
         
         # If we have a signal generator instance and auto_connect is True, connect to it
         if self.sg is not None and auto_connect_hardware:
@@ -994,9 +994,11 @@ class SG384ControlPanel(QMainWindow):
         dark_palette.setColor(QPalette.ColorRole.Link, "#5a96dc")
         dark_palette.setColor(QPalette.ColorRole.Highlight, "#5078b4")
         dark_palette.setColor(QPalette.ColorRole.HighlightedText, "#f0f0f0")
+        
         # Disabled colors
         dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, "#7f7f7f")
         dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, "#7f7f7f")
+        
         app.setPalette(dark_palette)
         
         # Global stylesheet
@@ -1192,6 +1194,22 @@ QGroupBox::title {
         self.state_combo.lineEdit().setPlaceholderText("Enter name or select...")
         filename_row.addWidget(self.state_combo)
         
+        open_folder_btn = QPushButton("...")
+        open_folder_btn.setFixedSize(25, 25)
+        open_folder_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #484848;
+                border: 1px solid #555555;
+                border-radius: 3px;
+                color: #ffffff;
+            }
+            QPushButton:hover {
+                background-color: #5a5a5a;
+            }
+        """)
+        open_folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(WORKING_DIRECTORY)))
+        filename_row.addWidget(open_folder_btn)
+
         # Refresh file list button
         self.refresh_files_btn = QPushButton("↻")
         self.refresh_files_btn.setFixedSize(25, 25)
@@ -1738,9 +1756,10 @@ QGroupBox::title {
                 else:
                     # Read values FROM the signal generator to GUI
                     self._sync_from_hardware()
-                    self._connect_signals()
-                    self.last_error_label.set_msg("✓ Connected to SG384 (synced from hardware)")
-                    self.last_error_label.styleSheet()
+                    if self._connected:
+                        self._connect_signals()
+                        self.last_error_label.set_msg("✓ Connected to SG384 (synced from hardware)")
+                        self.last_error_label.styleSheet()
                     
             except Exception as e:
                 self.last_error_label.set_msg(f"✗ Connection failed: {e}", error=True)
@@ -1823,7 +1842,7 @@ QGroupBox::title {
                 self.ntype_output.setModulationFunction(self.sg.mod_func)
                 self.ntype_output.setModulationDeviation(self.sg.mod_dev)
                 self.ntype_output.setModulationRate(self.sg.mod_rate)
-            
+
             # Update BNC section
             self.bnc_output.setOutputState(bool(self.sg.status_bnc))
             self.bnc_output.setAmplitude(self.sg.amp_bnc)
@@ -1837,7 +1856,6 @@ QGroupBox::title {
                 self.last_error_label.set_msg(f"⚠ Synced with errors (code {error_code})", error=True)
             
         except Exception as e:
-            # print(f"Error syncing from hardware: {e}")
             self.last_error_label.set_msg(f"⚠ Sync failed: {str(e)}", error=True)
             # self._error_clear_timer.start(5000)
             self._connected = False

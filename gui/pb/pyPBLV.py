@@ -12,6 +12,7 @@ Based on pyPBLV_qbuttongroup.py with improvements:
 
 @author: brate
 """
+# TODO: check if the input can be reflected in the status bar for the user..
 
 import sys, os, logging, json, ctypes
 from pathlib import Path
