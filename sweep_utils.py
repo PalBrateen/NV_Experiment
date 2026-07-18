@@ -201,7 +201,7 @@ class Sweep:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def make_pb_setter(pb, param_index: int, instr: str, sequence: str,
-                   seq_args_template: list, pb_channels: dict) -> Callable:
+                   seq_args_template: list, pb_channels: list) -> Callable:
     """
     Closure: overwrite seq_args[param_index], reprogram + restart PB.
 

@@ -18,39 +18,35 @@ running, use:
     exp = DiodeExperiment(instruments, config)
     result = exp.validate(plot_errors=True)
     if not result.all_valid:
-        print(result.summary())
+        printt(result.summary())
 """
 
-import numpy as np
-import time
+import numpy as np, time
 from pathlib import Path
 from typing import Optional, Callable, TYPE_CHECKING
-
 from experiment_base import DiodeExperiment, read_details, process_data
+from experiment_config import ExperimentConfig
 
-if TYPE_CHECKING:
-    from experiment_config import ExperimentConfig
-
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 def run(
     instruments: dict,
     config: 'ExperimentConfig',
     callback: Optional[Callable] = None,
     stop_check: Optional[Callable] = None,
-    save_path: Optional[Path] = None,
-    folder_number: Optional[str] = None,
+    save_path: Path|None = None,
+    folder_number: str|int|None = None,
 ):
-    """
-    Run a diode-based NV experiment.
+    """Run a diode-based NV experiment.
 
     Args:
-        instruments: dict with 'sg', 'pb', 'ao_task'
-        config:      ExperimentConfig dataclass instance
-        callback:    callable(inner_idx, val, i_run, oc_idx, oc_vals,
-                             processed, raw)
-        stop_check:  callable() -> bool
-        save_path:   Path or None
-        folder_number: str or None
+        instruments :   dict with 'sg', 'pb', 'ao_task'
+        config :        ExperimentConfig dataclass instance
+        callback :      callable(inner_idx, val, i_run, oc_idx, oc_vals, processed, raw)
+        stop_check :    callable() -> bool [Monitor Stop button press in GUI]
+        save_path:      Path or None
+        folder_number:  str or int or None
 
     Returns:
         (exp, data_array) — exp is the DiodeExperiment with all state.
@@ -102,7 +98,6 @@ if __name__ == '__main__':
     from SGcontrol import SignalGenerator, SignalGenerator_sim
     from PBcontrol import PulseBlaster
     from DAQcontrol import AnalogOutputTask
-    import connectionConfig as concfg
 
     psutil.Process(os.getpid()).cpu_affinity([0, 1])
 
@@ -132,6 +127,7 @@ if __name__ == '__main__':
     try:
         exp, data = run(instruments=instruments, config=config)
 
+        # assert exp.sweep
         # Plot
         iv = exp.sweep.inner_values
         xu = config.plot.x_units
@@ -155,4 +151,4 @@ if __name__ == '__main__':
         time.sleep(0.3); ao_task.__del__()
         if hasattr(sg, 'uninit'): sg.uninit()
         pb.stop_sequence(); pb.closePB()
-        print("✔ All instruments closed")
+        printt("✔ All instruments closed")

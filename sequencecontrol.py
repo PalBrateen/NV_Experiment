@@ -5,7 +5,7 @@ PulseBlaster sequence construction and visualization.
 Three public functions:
 
     make_sequence(instr, sequence, args)
-        Dispatch to the correct sequence builder in control_daq_sequences
+        Dispatch to the correct sequence_function in control_daq_sequences
         or control_camera_sequences.  Returns (func_name, allPBchannels).
 
     event_cataloguer(pb_channels)
@@ -24,22 +24,20 @@ All validation (parameter bounds, Cartesian-product PB timing checks)
 lives in experiment_base.DiodeExperiment.validate().
 """
 
-import sys
-import math
-import numpy as np
-import matplotlib.pyplot as plt
+import sys, math, numpy as np, PBcontrol, control_daq_sequences as daq_seq, control_camera_sequences as cam_seq
+import matplotlib.pyplot as plt, matplotlib as mpl, time
+plt.style.use(['dark_background'])
+plt.rcParams['axes.prop_cycle'] = mpl.rcParamsOrig['axes.prop_cycle']
 
-import control_daq_sequences as daq_seq
-import control_camera_sequences as cam_seq
-import PBcontrol
-
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Sequence dispatch tables
+#  Sequence dispatch all_sequencess
 # ═══════════════════════════════════════════════════════════════════════
 
-# Maps (instr_type, sequence_name) → builder function.
-# Each builder takes (*args) and returns a list of PBchannel namedtuples.
+# Maps (instr_type, sequence_name) → sequence_function.
+# Each sequence_function takes (*args) and returns a list of PBchannel namedtuples.
 
 _DIODE_SEQUENCES = {
     'esr_seq':              daq_seq.make_esr_seq,
@@ -62,6 +60,7 @@ _DIODE_SEQUENCES = {
     'esr_dig_mod_seq':      daq_seq.make_dig_mod_odmr_sequence,
     'rabi_dig_mod_seq':     daq_seq.make_dig_mod_rabi_sequence,
     'rabi_contrast_seq':    daq_seq.make_rabi_contrast_sequence,
+    'echo_seq':             daq_seq.make_echo_seq_MW,
 }
 
 _CAM_SEQUENCES = {
@@ -93,7 +92,7 @@ _DISPATCH = {
 # ═══════════════════════════════════════════════════════════════════════
 
 def make_sequence(instr: str, sequence: str, args: list):
-    """Dispatch to the correct sequence builder.
+    """Dispatch to the correct sequence_function.
 
     Parameters
     ----------
@@ -103,14 +102,14 @@ def make_sequence(instr: str, sequence: str, args: list):
     sequence : str
         Sequence name (e.g. 'esr_seq', 'rabi_seq', 'ram_seq').
     args : list
-        Positional arguments forwarded to the builder function.
+        Positional arguments forwarded to the sequence_function.
         Typically: [timing_params..., pb_channels_dict].
 
     Returns
     -------
     (func_name, pb_channels) : tuple[str, list[PBchannel]]
-        func_name is the builder's __name__ (for logging/display).
-        pb_channels is whatever the builder returns — typically a list
+        func_name is the sequence_function's __name__ (for logging/display).
+        pb_channels is whatever the sequence_function returns — typically a list
         of PBchannel namedtuples (one set for diode, possibly nested
         for camera signal/reference halves).
 
@@ -119,26 +118,19 @@ def make_sequence(instr: str, sequence: str, args: list):
     ValueError
         If instr or sequence is not recognized.
     """
-    table = _DISPATCH.get(instr)
-    if table is None:
+    sequence_function = _DISPATCH[instr].get(sequence)
+    if sequence_function is None:
         raise ValueError(
-            f"Unknown instrument type '{instr}'. "
-            f"Valid: {list(_DISPATCH.keys())}")
+            f"Unknown sequence '{sequence}' for instr='{instr}'. ")
 
-    builder = table.get(sequence)
-    if builder is None:
-        raise ValueError(
-            f"Unknown sequence '{sequence}' for instr='{instr}'. "
-            f"Valid: {list(table.keys())}")
-
-    return builder.__name__, builder(*args)
+    return sequence_function.__name__, sequence_function(*args)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 #  event_cataloguer
 # ═══════════════════════════════════════════════════════════════════════
 
-def event_cataloguer(pb_channels) -> dict[float, int]:
+def sequence_event_cataloguer(pb_channels) -> dict[int, int]:
     """Convert PBchannel pulse definitions to a time-sorted bitmask dict.
 
     Each PBchannel namedtuple specifies which hardware channel turns on
@@ -196,12 +188,11 @@ def event_cataloguer(pb_channels) -> dict[float, int]:
 
     return bitmasks
 
-
 # ═══════════════════════════════════════════════════════════════════════
 #  plot_sequence
 # ═══════════════════════════════════════════════════════════════════════
 
-def plot_sequence(instructions: list, channel_map: dict):
+def plot_sequence(instructions: list, channels: list):
     """Render PB instructions as a multi-channel timing diagram.
 
     Parameters
@@ -209,8 +200,8 @@ def plot_sequence(instructions: list, channel_map: dict):
     instructions : list[list]
         PB instruction list from create_PBinstruction().
         Each entry: [bitmask, inst_type, inst_data, duration_ns].
-    channel_map : dict[str, int]
-        Channel names → bitmask values.
+    channels : list
+        `PBpins` -> Convert to dict
         E.g. {'laser': 8, 'mw': 4, 'samp': 2, 'start': 16}.
 
     Returns
@@ -238,8 +229,9 @@ def plot_sequence(instructions: list, channel_map: dict):
 
     # Build per-channel traces
     channel_traces = []
-    for ch_name, ch_mask in channel_map.items():
-        bit_index = int(math.log2(ch_mask))
+    for idx, channel in enumerate(channels):
+        ch_mask = channel.value
+        bit_index = idx
         trace = [0.0, float(bool(ch_mask & instructions[0][0]))]
 
         for i in range(n_inst):
@@ -254,21 +246,16 @@ def plot_sequence(instructions: list, channel_map: dict):
         # Offset and scale for stacked display
         scaled = [bit_index + v * SCALE for v in trace]
         channel_traces.append(scaled)
-
-    # Y-ticks at each channel's bit index
-    bit_indices = [int(math.log2(m)) for m in channel_map.values()]
-    y_ticks = np.arange(min(bit_indices), max(bit_indices) + 1, 1)
+    y_ticks = np.arange(0, len(channels), 1)
 
     return t_us, channel_traces, y_ticks
-
 
 # ═══════════════════════════════════════════════════════════════════════
 #  view_sequence  —  quick compile-and-plot utility
 # ═══════════════════════════════════════════════════════════════════════
 
-def view_sequence(instr: str, sequence: str, seq_args: list,
-                  param_values=None, indices=None,
-                  param_index: int = 0, dpi: int = 100):
+def view_sequence(instr: str, sequence: str, seq_args: list, param_values=None,
+                  indices: list[int] = [], param_index: int = 0, dpi: int = 100) -> list:
     """Compile and plot PB sequences at one or more parameter values.
 
     Parameters
@@ -278,11 +265,11 @@ def view_sequence(instr: str, sequence: str, seq_args: list,
     sequence : str
         Sequence name.
     seq_args : list
-        Full sequence args list (last element = pb_channels dict).
+        Full sequence args list (last element = pb_channels list).
         NOT mutated — a copy is made internally.
     param_values : array-like, optional
         Sweep values to plot.  If None, plots the sequence as-is.
-    indices : list[int], optional
+    indices : list[int]
         Which indices into param_values to plot (default: [0]).
         Supports negative indexing (e.g. [-1] for last point).
     param_index : int
@@ -302,7 +289,7 @@ def view_sequence(instr: str, sequence: str, seq_args: list,
     if param_values is None:
         param_values = [seq_args[param_index]]
         indices = [0]
-    if indices is None:
+    if indices is []:
         indices = [0]
 
     # Resolve negative indices
@@ -311,14 +298,15 @@ def view_sequence(instr: str, sequence: str, seq_args: list,
 
     pb_channels = seq_args[-1]  # last arg is always the channel map
 
+    the_lists = []
     for idx in indices:
         # Work on a copy — never mutate the caller's list
         args_copy = list(seq_args)
         if not freq_only:
             args_copy[param_index] = param_values[idx]
 
-        _, the_list = PBcontrol.PulseBlaster.PB_program(
-            instr, sequence, args_copy)
+        _, the_list = PBcontrol.PulseBlaster.PB_program(instr, sequence, args_copy)
+        the_lists.append(the_list)
 
         for sub in the_list:
             inst_list = sub[0]
@@ -326,70 +314,15 @@ def view_sequence(instr: str, sequence: str, seq_args: list,
 
             fig, ax = plt.subplots(dpi=dpi)
             t_us, traces, y_ticks = plot_sequence(inst_list, pb_channels)
-
             for trace in traces:
                 ax.plot(t_us, trace)
-
-            ax.set_yticks(y_ticks, list(pb_channels.keys()))
+            ax.set_yticks(y_ticks, [channel.name for channel in pb_channels])
             ax.set_xlabel('Time (µs)')
-            ax.set_ylabel('Channel')
+            # TODO: prints th wrong title for ESR (freq like sequences) - the first argument is time while I need frequency
             ax.set_title(
-                f"{sequence}  |  param[{idx}] = "
-                f"{param_values[idx]:.4g} ns\n"
+                f"{sequence}  |  param[{idx}] = {param_values[idx]:.4g} ns|GHz\n"
                 f"Transitions: {list(inst_times.values())}",
                 fontsize=10)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Backward-compatible class wrapper
-# ═══════════════════════════════════════════════════════════════════════
-#
-# PBcontrol.py calls sequencecontrol.sequencecontrol.make_sequence(...)
-# and sequencecontrol.sequencecontrol.sequence_event_cataloguer(...).
-#
-# Rather than touching PBcontrol.py, we expose a thin class that
-# delegates to the module-level functions above.  The class holds no
-# state and needs no __init__ args (the old one only stored
-# parameter_dict for check_params, which is gone).
-
-class sequencecontrol:
-    """Thin class wrapper for PBcontrol.py compatibility.
-
-    PBcontrol imports this as:
-        import sequencecontrol
-        sequencecontrol.sequencecontrol.make_sequence(...)
-        sequencecontrol.sequencecontrol.sequence_event_cataloguer(...)
-
-    All methods delegate to module-level functions.
-    """
-
-    def __init__(self, parameter_dict=None):
-        # parameter_dict accepted for backward compat but unused.
-        pass
-
-    @staticmethod
-    def make_sequence(instr, sequence, args):
-        return make_sequence(instr, sequence, args)
-
-    @staticmethod
-    def sequence_event_cataloguer(pb_channels):
-        return event_cataloguer(pb_channels)
-
-    @staticmethod
-    def plot_sequence(instructions, channel_map):
-        return plot_sequence(instructions, channel_map)
-
-    @staticmethod
-    def view_sequence(instr, sequence, seq_args, only_plot=False,
-                      parameter=None, seq_no_plot=None, plot_dpi=100):
-        """Legacy-compatible signature that maps to view_sequence()."""
-        if parameter is None:
-            parameter = [0]
-        if seq_no_plot is None:
-            seq_no_plot = [0]
-        # Map old args to new
-        param_values = parameter
-        indices = seq_no_plot
-        view_sequence(instr, sequence, seq_args,
-                      param_values=param_values,
-                      indices=indices, dpi=plot_dpi)
+            fig.tight_layout()
+            fig.show()
+    return the_lists

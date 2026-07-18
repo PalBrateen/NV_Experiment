@@ -13,15 +13,12 @@ Instruments dict must include 'camera_worker' (from Camcontrol.CameraWorker).
 Phase 1: cam_levelm mode, static B field, no AO patterns.
 """
 
-import numpy as np
-import time
+import numpy as np, time
 from pathlib import Path
 from typing import Optional, Callable, TYPE_CHECKING
 
 from camera_experiment import CameraExperiment, process_camera_data
-
-if TYPE_CHECKING:
-    from experiment_config import ExperimentConfig
+from experiment_config import ExperimentConfig
 
 
 def run(
@@ -76,7 +73,6 @@ if __name__ == '__main__':
     from PBcontrol import PulseBlaster
     from DAQcontrol import AnalogOutputTask
     from Camcontrol import CameraWorker
-    import connectionConfig as concfg
 
     psutil.Process(os.getpid()).cpu_affinity([0, 1])
 
@@ -112,7 +108,7 @@ if __name__ == '__main__':
 
     try:
         exp, data = run(instruments=instruments, config=config)
-
+        assert exp.sweep
         # Plot
         iv = exp.sweep.inner_values
         xu = config.plot.x_units

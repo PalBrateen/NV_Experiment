@@ -1,6 +1,6 @@
 # control_camera_sequences.py
 
-from connectionConfig import laser, samp_clk, start_trig, I, Q, MW, PBclk, camera
+from experiment_config import PB_CLK, PBpins
 from spinapi import ns, us, ms
 from collections import namedtuple
 
@@ -9,12 +9,23 @@ from collections import namedtuple
     2. startTimes
     3. pulseDurations
 """
-PBchannel = namedtuple('PBchannel', ['channelNumber', 'startTimes', 'pulseDurations'])
+PBchannel = namedtuple('PBchannel', ['channel_number', 'start_times', 'pulse_durations'])
+
+def compile_sequence(pbchannels: list[PBpins], channel_timings: dict):
+    """Compact sequence maker."""
+    allPBchannels = []
+    active_pbchannels = {m.name.lower(): m.value for m in pbchannels}
+    # build channels
+    for channel, (starts, durations) in channel_timings.items():
+        if channel in active_pbchannels:
+            allPBchannels.append(PBchannel(active_pbchannels[channel], starts, durations))
+    return allPBchannels
+
 conv_clk_sep = 10*us
-pulse_width = 100*ns
+TRIG_WIDTH = 100*ns
 camera_delay = (87.7+0)*us
 
-clk_cyc = 1e3/PBclk       # Time resolution in ns
+CLK_CYC = 1e3/PB_CLK            # Time resolution in ns
 # Short pulse flags: Switch ON bits 21-23 of the Control word to enable short pulse feature
 ONE_PERIOD = 0x200000           # 23/22/21/20 = 0010b = 2^21d = 200000x
 TWO_PERIOD = 0x400000           # 23/22/21/20 = 0100 = 2^22
@@ -174,10 +185,10 @@ def make_t2_seq(t_delay, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi):
 #     apd_pulse = [t_delay+AOM_lag+ro_delay, 2*t_delay+t_AOM+AOM_lag+ro_delay]
 
 #     laser_channel = PBchannel(laser, [t_delay, 2*t_delay+t_AOM], [t_AOM,t_AOM])
-#     start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
+#     start_trig_channel = PBchannel(start_trig, [0], [TRIG_WIDTH])
 #     MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag, 0*us+AOM_lag+t_pi/2+delay_1st_half-MW_lag, 0*us+AOM_lag+(t_delay-0*us)-MW_lag-t_pi/2], [t_pi/2, t_pi, t_pi/2])
 #     # The third MW pulse 
-#     samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-pulse_width, apd_pulse[1]-pulse_width], [pulse_width, pulse_width])
+#     samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-TRIG_WIDTH, apd_pulse[1]-TRIG_WIDTH], [TRIG_WIDTH, TRIG_WIDTH])
     
 #     allPBchannels = [MWchannel, laser_channel, samp_clk_channel, start_trig_channel, conv_clk_channel]
 #     return allPBchannels

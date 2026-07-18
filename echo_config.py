@@ -1,105 +1,99 @@
-# echo_config.py
-"""List of variables:
-    * sequence: (String) Name of the sequence
-    * scanStartName:
-    * scanEndName:
-    * sequenceargs: (List) of arguments (parameters) to be used in creating the pulse sequence
-    * PBchannels: (List) of PB channels to be used in the sequence
-    * expParamList: (List) of all experimental parameters used in this sequence
+"""
+echo_config.py — Rabi experiment configuration.
 """
 
-#%%Imports
-from connectionConfig import PBclk, laser, start_trig, samp_clk, MW, conv_clk
-from SGcontrol import Hz, kHz, MHz, GHz
-from spinapi import ns,us,ms
-import numpy as np
-import os
-# from time import localtime, strftime
+from experiment_config import (
+    ExperimentConfig, ScanAxis, ScanMode, PBpins, DAQ_INFO, MicrowaveConfig, TimeConfig,
+    PulseBlasterConfig, SequenceConfig, DAQAIConfig, PlotConfig, RuntimeFlags, DAQCIConfig,
+)
+ns, us, ms = 1., 1e3, 1e6
+Hz, kHz, MHz, GHz = 1., 1e3, 1e6, 1e9
 
-clk_cyc = 1e3/PBclk # Time resolution in ns
+# ── Timing ──────────────────────────────────────────────────────────────
+tau_center = 1 *us
+t_pi = 132 *ns
 
-#-------------------------  USER INPUT  ---------------------------------------#
-# See that all the experimental parameters are Python mutable object types
+t_AOM    = 2000 * us
+ro_delay = 1000 * ns
+AOM_lag  = 800 * ns
+MW_lag   = 80 * ns
+# Nsamples = max(2, int((t_AOM) / ms * 1e-3 * 10e3))
+# Nsamples = 2 * int(1*us / us*1e-6 * 2e6)
+Nsamples = 2
+Ncycles = 5000
 
-#%% Microwave scan parameters:----------------------------------------------------
-MW_power = 8          # Microwave power output from SRS(dBm)
-MW_freq = 2850 /1e3*GHz
-t_duration = 108 *ns         # Duration of pi-pulse
-# The duration of pi-by-2 pulse is calculated in 'sequenceControl'
+# ── Channel map ─────────────────────────────────────────────────────────
+channels = [
+    PBpins.samp_clk,
+    PBpins.MW,
+    PBpins.laser,
+    PBpins.start_trig,
+    PBpins.pause_trig,
+    PBpins.gate,
+]
 
-startinterval = -1000 *ns     # Start interval (in nanoseconds)
-endinterval = 1000 *ns      # End interval (in nanoseconds)
-step_size = 10 * ns
-N_scanPts = round((endinterval - startinterval)/step_size + 1)
-# N_scanPts = 1501              # Number of pulse length steps
+# ── Build config ────────────────────────────────────────────────────────
+config = ExperimentConfig(
+    scans={
+        'tau': ScanAxis(
+            name='tau',
+            start=tau_center-500 *ns,
+            stop=tau_center+500 *ns,
+            step=2 *ns,
+        ),
+        # 'mw_power': ScanAxis(
+        #     name='mw_power',
+        #     explicit_values=[8, 5, -20],
+        # ),
+        # 'AOM_lag': ScanAxis(
+        #     name='AOM_lag',
+        #     start=800,
+        #     stop=1000,
+        #     step=200,
+        # ),
+        # 't_AOM': ScanAxis(
+        #     name='t_AOM',
+        #     start=0.1 *ms,
+        #     stop=0.2 *ms,
+        #     step=0.1 *ms,
+        # ),
+    },
 
-#%% Pulse sequence parameters:----------------------------------------------------
-t_AOM = 20 * us                    # AOM pulse duration (ns)
-ro_delay = 300 * ns      # Readout delay (ns)
-AOM_lag = (800) * ns
-MW_lag = 150 * ns
+    mw=MicrowaveConfig(power=8, freq=2.864*GHz),
+    times=TimeConfig(t_AOM=t_AOM, t_pi=t_pi, ro_delay=ro_delay),
+    seq=SequenceConfig(
+        name='echo_seq',
+        args_names=['tau_c', 't_AOM', 'ro_delay', 'AOM_lag', 'MW_lag', 't_pi'],
+        args_values=[tau_center, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi],
+        Nsamples=Nsamples,
+        Ncycles=Ncycles
+    ),
+    # daq_ai = DAQAIConfig(
+    #     voltage_ranges=[(-0.1,0.1)],
+    #     sample_source='',
+    #     # sample_source=DAQ_INFO['samp_clk_terminal'],
+    #     sample_rate=2e6,
+    #     samps_per_chan=Nsamples,
+    #     start_trigger_source=DAQ_INFO['start_trig_terminal'],
+    #     pause_trigger_source=DAQ_INFO['pause_trig_terminal'],
+    #     # pause_trigger_source='',
+    # ),
+    daq_ci = DAQCIConfig(
+        sample_source=DAQ_INFO['samp_clk_terminal'],
+        samps_per_chan=Nsamples,
+        start_trigger_source=DAQ_INFO['start_trig_terminal'],
+        pause_trigger_source=DAQ_INFO['pause_trig_terminal'],
+    ),
+    runtime=RuntimeFlags(Nruns=2, reload_pb=True, seq_plot_indices=[-1]),
 
-tau = 10 *us
+    plot=PlotConfig(x_label='tau', x_label_units='s', x_units=ns),
+    pb=PulseBlasterConfig(clock_MHz=ExperimentConfig.PB_CLK,
+                          channels=sorted(channels),),
+)
 
-Nsamples = 1                  # Number of FL ssamples to take at each pulse length poin
-Nruns = 1                        # Number of averaging runs to do
+# _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'daq_ci', 'uhfli', 'camera', 'field_cfg'}
+# config.use('mw', 'daq_ai')
 
-#%% Plotting options--------------------------------------------------------------
-# Contrast mode
-contrast_mode ='ratio_signal_over_reference'
-# Live plot update option
-# livePlotUpdate = True
-# Plot pulse sequence option  - set to true to plot the pulse sequence
-# plotPulseSequence = True
-# Plot x axis unit multiplier (ns, us or ms)
-plotXaxisUnits = ns
-# Plot x axis label
-xAxisLabel = 'Interval (ns)'
-
-#%% Save options------------------------------------------------------------------
-saveSpacing_inScanPts = 2       # Save interval for first scan through all pulse length points:
-saveSpacing_inAverages = 3      # Save interval in averaging runs:
-savePath = os.getcwd()+"\\Saved_Data\\"     # Path to folder where data will be saved:
-saveFileName = "Echo"      # File name for data file
-
-#%% Averaging options:------------------------------------------------------------
-# Option to do shot by shot contrast normalization:
-shotByShotNormalization = int(False)
-# Option to randomize order of scan points
-randomize = int(True)
-#------------------------- END OF USER INPUT ----------------------------------#
-
-#%%
-scannedParam = np.linspace(startinterval+tau, endinterval+tau, N_scanPts, endpoint=True)
-# N_scanPts = len(scannedParam)
-# scannedParam = np.insert(scannedParam, len(scannedParam), 0)
-sequence = 'spin_echo'       #Sequence string
-scanStartName = 'startinterval' 	 	#Scan start Name
-scanEndName = 'endinterval' 	 	 	#Scan end Name
-PBchannels = {'Conv\nCLK':conv_clk, 'Samp\nCLK':samp_clk, 'MW':MW, 'Laser':laser,
-              'Start\nTrig':start_trig}
-sequenceArgs = [tau, t_AOM, ro_delay, AOM_lag, MW_lag, t_duration]      #Sequence args
-
-#Make save file path
-# dateTimeStr = strftime("%Y-%m-%d_%Hh%Mm%Ss", localtime())
-# dataFileName = savePath + saveFileName+ dateTimeStr +".txt"
-#Make param file path
-# paramFileName = savePath + saveFileName + dateTimeStr+'_PARAMS.txt'
-
-#Param file save settings
-formattingSaveString = " %s\t%d\n %s\t%d\n %s\t%d\n %s\t%g\n %s\t%g\n %s\t%g\n %s\t%g\n %s\t%g\n %s\t%g\n %s\t%g\n %s\t%g\n %s\t%g\n"       #" %s\t%r\n %s\t%r\n"
-#List of experimental Parameters saved in expParamList
-expParamList = ['N_timePts:',N_scanPts, 'Nruns:',Nruns, 'Nsamples:',Nsamples, 'startinterval:',scannedParam[0], 'endinterval:',scannedParam[-1], 'MW_power:',MW_power, 'MW_freq:',MW_freq, 't_pi:',t_duration, 't_AOM:',t_AOM, 'ro_delay:',ro_delay, 'AOM_lag:',AOM_lag, 'MW_lag:',MW_lag]       #, 'shotByShotNormalization:',shotByShotNormalization, 'randomize:',randomize] #,'saveSpacing_inScanPts:',saveSpacing_inScanPts,'saveSpacing_inAverages:',saveSpacing_inAverages]       # 13 parameters
-
-"""-------------------------------------------------------------------------------------------------
-    Note that: The following functions take the values defined above when called. However, due to their definition, the variables can be changed if called, since they are all "mutable object types" (e.g. Rabiconfig.Nsamples=100).
-    If the function is called again, the new value is updated.
--------------------------------------------------------------------------------------------------"""
-
-def updateSequenceArgs():
-    sequenceArgs = [tau, t_AOM, ro_delay, AOM_lag, MW_lag, t_duration]
-    return sequenceArgs
-    
-def updateExpParamList():
-    expParamList = ['N_timePts:',N_scanPts, 'Nruns:',Nruns, 'Nsamples:',Nsamples, 'startinterval:',scannedParam[0], 'endinterval:',scannedParam[-1], 'MW_power:',MW_power, 'MW_freq:',MW_freq, 't_pi:',t_duration, 't_AOM:',t_AOM, 'ro_delay:',ro_delay, 'AOM_lag:',AOM_lag, 'MW_lag:',MW_lag]       #, 'shotByShotNormalization:',shotByShotNormalization, 'randomize:',randomize] #,'saveSpacing_inScanPts:',saveSpacing_inScanPts,'saveSpacing_inAverages:',saveSpacing_inAverages]       # 13 parameters
-    return expParamList
+# configure detector based on input
+if config.daq_ai is None and config.daq_ci:
+    config.runtime.detector = 'counter'

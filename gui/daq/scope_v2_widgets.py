@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, Property, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QBrush, QPen, QFont
 from scope_v2_core import (
-    ChannelConfig, DAQDeviceInfo, CircularBuffer,
+    AIChannelConfig, CIChannelConfig, DAQDeviceInfo, CircularBuffer,
     ObservableConfig, get_device_info, enumerate_devices
 )
 
@@ -241,7 +241,7 @@ class ScopeWidget(pg.PlotWidget):
         })
         
         self.setBackground('#1a1a1a')
-        self.setLabel('left', 'Voltage', 'V')
+        self.setLabel(axis='left', text='Voltage', units='V')
         self.setLabel('bottom', 'Time', 's')
         
         # Configure grid
@@ -258,18 +258,18 @@ class ScopeWidget(pg.PlotWidget):
                                        pen=pg.mkPen('#FFAA00', width=1, style=Qt.PenStyle.DashLine))
         self._vline.setVisible(False)
         self._hline.setVisible(False)
-        self.addItem(self._vline, ignoreBounds=True)
-        self.addItem(self._hline, ignoreBounds=True)
+        self.addItem(self._vline, ignoreBounds=True)        # type: ignore
+        self.addItem(self._hline, ignoreBounds=True)        # type: ignore
         
         # Floating cursor label on plot
         self._cursor_label = pg.TextItem(color='#FFAA00', anchor=(0, 1))
         self._cursor_label.setFont(pg.QtGui.QFont('Consolas', 9))
         self._cursor_label.setVisible(False)
-        self.addItem(self._cursor_label, ignoreBounds=True)
+        self.addItem(self._cursor_label, ignoreBounds=True) # type: ignore
         
         # Enable mouse tracking
         self.setMouseTracking(True)
-        self.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self.scene().sigMouseMoved.connect(self._on_mouse_moved)        # type: ignore
         
         # Averaging
         self._averaging_enabled = False
@@ -325,10 +325,10 @@ class ScopeWidget(pg.PlotWidget):
             fill = pg.FillBetweenItem(zero_curve, hist_curve, brush=fill_color)
             self.addItem(fill)
             
-            self._histogram_curves[ch_idx] = (hist_curve, zero_curve)
+            self._histogram_curves[ch_idx] = (hist_curve, zero_curve)   # type: ignore
             self._histogram_fills[ch_idx] = fill
         
-        hist_curve, zero_curve = self._histogram_curves[ch_idx]
+        hist_curve, zero_curve = self._histogram_curves[ch_idx]     # type: ignore
         
         # Compute histogram
         counts, bin_edges = np.histogram(data, bins=self._histogram_bins)
@@ -364,7 +364,7 @@ class ScopeWidget(pg.PlotWidget):
         
         # Show/hide histogram items
         for ch_idx in list(self._histogram_curves.keys()):
-            hist_curve, zero_curve = self._histogram_curves[ch_idx]
+            hist_curve, zero_curve = self._histogram_curves[ch_idx]     # type: ignore
             hist_curve.setVisible(enabled)
             zero_curve.setVisible(enabled)
             if ch_idx in self._histogram_fills:
@@ -423,7 +423,7 @@ class ScopeWidget(pg.PlotWidget):
         self._last_data.clear()
         # Clear histogram displays
         for ch_idx in list(self._histogram_curves.keys()):
-            hist_curve, zero_curve = self._histogram_curves[ch_idx]
+            hist_curve, zero_curve = self._histogram_curves[ch_idx]     # type: ignore
             hist_curve.setData([], [])
             zero_curve.setData([], [])
     
@@ -438,7 +438,7 @@ class ScopeWidget(pg.PlotWidget):
             del self._last_data[ch_idx]
         # Remove histogram items
         if ch_idx in self._histogram_curves:
-            hist_curve, zero_curve = self._histogram_curves[ch_idx]
+            hist_curve, zero_curve = self._histogram_curves[ch_idx]     # type: ignore
             self.removeItem(hist_curve)
             self.removeItem(zero_curve)
             del self._histogram_curves[ch_idx]
@@ -533,7 +533,7 @@ class TrendsWidget(pg.PlotWidget):
         
         self.setBackground('#1a1a1a')
         self.showGrid(x=True, y=True, alpha=0.3)
-        self.setLabel('left', 'Value', 'µV')
+        self.setLabel(axis='left', text='Value', units='V')
         self.setLabel('bottom', 'Time', 's')
         self.addLegend()
         
@@ -700,17 +700,17 @@ class FFTWidget(pg.PlotWidget):
         self._vline = pg.InfiniteLine(angle=90, movable=False, 
                                       pen=pg.mkPen('#FFAA00', width=1, style=Qt.PenStyle.DashLine))
         self._vline.setVisible(False)
-        self.addItem(self._vline, ignoreBounds=True)
+        self.addItem(self._vline, ignoreBounds=True)        # type: ignore
         
         # Floating cursor label
         self._cursor_label = pg.TextItem(color='#FFAA00', anchor=(0, 1))
         self._cursor_label.setFont(pg.QtGui.QFont('Consolas', 9))
         self._cursor_label.setVisible(False)
-        self.addItem(self._cursor_label, ignoreBounds=True)
+        self.addItem(self._cursor_label, ignoreBounds=True) # type: ignore
         
         # Mouse tracking
         self.setMouseTracking(True)
-        self.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self.scene().sigMouseMoved.connect(self._on_mouse_moved)    # type: ignore
         
         # Averaging
         self._averaging_enabled = False
@@ -771,7 +771,7 @@ class FFTWidget(pg.PlotWidget):
     def _update_y_label(self):
         """Update Y axis label based on display mode and dB setting"""
         mode = self._display_mode
-        
+
         if self._use_db:
             labels = {
                 FFTDisplayMode.NORMAL: "dBV",
@@ -787,7 +787,11 @@ class FFTWidget(pg.PlotWidget):
                 FFTDisplayMode.PSD: "V²/Hz"
             }
         
-        self.setLabel('left', 'Magnitude', labels.get(mode, "V"))
+        label = labels.get(mode, "V")
+        if "²" in label:
+            self.setLabel(axis='left', text='Magnitude', units=label, unitPower=2)
+        else:
+            self.setLabel('left', 'Magnitude', label)
         
     def update_spectrum(self, ch_idx: int, freq: np.ndarray, mag: np.ndarray):
         """Update spectrum for a specific channel"""
@@ -1188,7 +1192,7 @@ class ChannelConfigWidget(QWidget):
         
     def _emit_config(self):
         colors = ['#00BFFF', '#FF6B6B', '#4ECDC4', '#FFE66D']
-        config = ChannelConfig(
+        config = AIChannelConfig(
             physical_channel=self.phys_combo.currentText(),
             enabled=self.enable_cb.isChecked(),
             min_voltage=self.min_spin.value(),
@@ -1199,9 +1203,9 @@ class ChannelConfigWidget(QWidget):
         )
         self.configChanged.emit(self.ch_idx, config)
         
-    def get_config(self) -> ChannelConfig:
+    def get_config(self) -> AIChannelConfig:
         colors = ['#00BFFF', '#FF6B6B', '#4ECDC4', '#FFE66D']
-        return ChannelConfig(
+        return AIChannelConfig(
             physical_channel=self.phys_combo.currentText(),
             enabled=self.enable_cb.isChecked(),
             min_voltage=self.min_spin.value(),

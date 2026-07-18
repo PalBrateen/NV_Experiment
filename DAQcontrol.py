@@ -1,11 +1,15 @@
 #DAQ control
-#%%
-import connectionConfig as concfg, nidaqmx, sys, os, numpy as np, matplotlib.pyplot as plt, logging
-from  nidaqmx.constants import VoltageUnits, TerminalConfiguration, AcquisitionType, Edge, Level, TriggerType, RegenerationMode, ProductCategory
+import nidaqmx, sys, os, numpy as np, logging, time
+import matplotlib.pyplot as plt, matplotlib as mpl
+from  nidaqmx.constants import VoltageUnits, TerminalConfiguration, AcquisitionType, Edge, Level, TriggerType, RegenerationMode, ProductCategory, CountDirection
 from typing import Union, List, Tuple, Optional
 from abc import ABC, abstractmethod
-from typing import Optional, Union, List  # Import at the top of file
-plt.style.use('seaborn-v0_8-deep')
+from typing import Optional, Union, List
+plt.style.use(['dark_background'])
+plt.rcParams['axes.prop_cycle'] = mpl.rcParamsOrig['axes.prop_cycle']
+
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 # Base abstract class for common functionality
 class DAQTask(ABC):
@@ -29,33 +33,31 @@ class DAQTask(ABC):
 class AnalogInputTask(DAQTask):
     def __init__(self,
                  dev = "P6363",
-                 channels: Optional[List[int]] = [21],
-                 voltage_range: tuple = (-10, 10),
-                 sampling_source: str = 'internal',
-                 sampling_rate: float = 10e3,
-                 sampling_mode: str = "finite",
+                 channels: list[int]|None = [21],
+                 voltage_ranges: list[tuple[float,float]] = [(-1., 1.)],
+                 sample_source: str = 'internal',
+                 sample_rate: float = 10e3,
+                 sample_mode: str = "finite",
                  samps_per_chan: int = 100,
                  start_trigger_source: str = '',  # Optional trigger
                  start_trigger_edge: str = "rising",       # Only used if start_trigger_source exists
-                 # TODO: PAUSE TRIGGER
                  pause_trigger_source: str = '',
                  name: str = '',
         ):
         super().__init__(name)
         self.dev = dev
         self.channels = channels or []
-        self.min_voltage, self.max_voltage = voltage_range
-        self.sampling = {
-            'source': '' if sampling_source.lower() in ['internal', ''] else sampling_source,
+        self.voltage_ranges = voltage_ranges
+        self.sample_clock = {
+            'source': '' if sample_source.lower() in ['internal', ''] else sample_source,
             'edge': Edge.RISING,
-            'rate': sampling_rate,
-            'mode': sampling_mode,
+            'rate': sample_rate,
+            'mode': sample_mode,
             'samps_per_chan': samps_per_chan,
         }
 
         # Store trigger configuration if provided
         self.start_trigger:dict = {}
-        # print(start_trigger_source)
         if start_trigger_source != '':
             self.start_trigger = {
                 "source": start_trigger_source,
@@ -66,8 +68,8 @@ class AnalogInputTask(DAQTask):
         self.pause_trigger:dict = {}
         if pause_trigger_source != '':
             self.pause_trigger = {
-                "type": "digital",
                 "source": pause_trigger_source,
+                "type": "digital",
                 "level": Level.LOW,
             }
 
@@ -76,30 +78,29 @@ class AnalogInputTask(DAQTask):
 
     def configure(self):
         try:
-            print("Configuring Analog Input..")
+            printt("Configuring Analog Input..")
             self._task = nidaqmx.Task()
-            for channel in self.channels:
+            for idx, channel in enumerate(self.channels):
                 self._task.ai_channels.add_ai_voltage_chan(
                     physical_channel=f"{self.dev}/ai{channel}",                    
                     terminal_config=TerminalConfiguration.RSE,
-                    min_val=self.min_voltage,
-                    max_val=self.max_voltage,
+                    min_val=self.voltage_ranges[idx][0],
+                    max_val=self.voltage_ranges[idx][1],
                 )
-            # print(DAQConfiguration.get_sampling_mode(mode_name=self.sampling_mode))
             self._task.timing.cfg_samp_clk_timing(
-                rate = self.sampling['rate'],
-                source = self.sampling['source'],
-                active_edge = self.sampling['edge'],
-                sample_mode = DAQConfiguration.get_sampling_mode(mode_name=self.sampling['mode']),
-                samps_per_chan = int(self.sampling['samps_per_chan']),
+                rate = self.sample_clock['rate'],
+                source = self.sample_clock['source'],
+                active_edge = self.sample_clock['edge'],
+                sample_mode = DAQProperty.get_sampling_mode(mode=self.sample_clock['mode']),
+                samps_per_chan = int(self.sample_clock['samps_per_chan']),
             )
-
-            # print()
-
             self._configure_triggers()
-
             self._task_state = "configured"
-            print("✔ Analog Input configured!")
+            printt("✔ Analog Input configured!")
+            printt(f"Input      : {self.channels}, range: {self.voltage_ranges}")
+            printt(f"Sampling   : {self.sample_clock}")
+            printt(f"Start      : {self.start_trigger}")
+            printt(f"Pause      : {self.pause_trigger}")
 
         except Exception as e:
             self._task_state = "error"
@@ -113,7 +114,7 @@ class AnalogInputTask(DAQTask):
             if self.start_trigger:
                 self._task.triggers.start_trigger.cfg_dig_edge_start_trig(
                     trigger_source=self.start_trigger["source"],
-                    trigger_edge=DAQConfiguration.get_start_trigger_edge(edge_name=self.start_trigger["edge"])
+                    trigger_edge=DAQProperty.get_trigger_edge(edge=self.start_trigger["edge"])
                 )
             
             # Pause trigger
@@ -137,7 +138,7 @@ class AnalogInputTask(DAQTask):
             logging.exception(f"❌ Start failed: {str(e)}")
             raise #RuntimeError(f"❌ Start failed: {str(e)}")
 
-    def read_daq(self,Nsamples,timeout=120):
+    def read_daq(self,Nsamples,timeout=120.):
         try:
             counts = self._task.read(Nsamples, timeout)
         except Exception as excpt:
@@ -171,8 +172,8 @@ class  AnalogOutputTask(DAQTask):
                  dev = "U9263",
                  channels: List[int] = [0,1,2],
                  voltage_range: tuple = (-10, 10),
-                 sampling_rate: float = 1000,
-                 sampling_mode: str = "continuous",
+                 sample_rate: float = 1000,
+                 sample_mode: str = "continuous",
                  samps_per_chan: int = 1000,       # this will define the output buffer
                  coil: str = 'default',
                  start_trigger_source: Optional[str] = '',  # Optional trigger
@@ -183,8 +184,8 @@ class  AnalogOutputTask(DAQTask):
         self.dev = dev
         self.channels = channels or []
         self.min_voltage, self.max_voltage = voltage_range
-        self.sampling_rate = sampling_rate
-        self.sampling_mode = sampling_mode
+        self.sample_rate = sample_rate
+        self.sample_mode = sample_mode
         self.samps_per_chan = samps_per_chan
         self.coil = coil
         self.params:dict = {}
@@ -204,7 +205,7 @@ class  AnalogOutputTask(DAQTask):
     def configure(self):
         # Example NI-DAQ configuration
         try:
-            print("Configuring Analog Output...")
+            printt("Configuring Analog Output...")
             self._task = nidaqmx.Task()
             for channel in self.channels:
                 self._task.ao_channels.add_ao_voltage_chan(
@@ -214,10 +215,10 @@ class  AnalogOutputTask(DAQTask):
                 )
 
             self._task.timing.cfg_samp_clk_timing(
-                rate=self.sampling_rate,
+                rate=self.sample_rate,
                 source='',
-                active_edge=DAQConfiguration.get_start_trigger_edge(edge_name="rising"),
-                sample_mode=DAQConfiguration.get_sampling_mode(mode_name=self.sampling_mode),
+                active_edge=DAQProperty.get_trigger_edge(edge="rising"),
+                sample_mode=DAQProperty.get_sampling_mode(mode=self.sample_mode),
                 samps_per_chan=self.samps_per_chan
             )
 
@@ -226,7 +227,7 @@ class  AnalogOutputTask(DAQTask):
                 self._configure_trigger()
 
             self._task_state = "configured"
-            print(">> Analog Output configured!")
+            printt(f"✔ Analog Output configured: channels = {self.channels}!")
 
         except Exception as e:
             self._task_state = "error"
@@ -240,7 +241,7 @@ class  AnalogOutputTask(DAQTask):
             # if source.startswith("ai"):  # Analog trigger
             #     self._task.triggers.start_trigger.cfg_anlg_edge_start_trig(
             #         start_trigger_source=source,
-            #         trigger_slope=DAQConfiguration.get_start_trigger_edge(edge_name=self.trigger_config["edge"]),
+            #         trigger_slope=DAQProperty.get_trigger_edge(edge=self.trigger_config["edge"]),
             #         trigger_level=self.trigger_config["level"] or 0.0
             #     )
             if source == '':
@@ -249,7 +250,7 @@ class  AnalogOutputTask(DAQTask):
             else:  # Digital trigger
                 self._task.triggers.start_trigger.cfg_dig_edge_start_trig(
                     trigger_source=source,
-                    trigger_edge=DAQConfiguration.get_start_trigger_edge(edge_name=self.trigger_config["edge"])
+                    trigger_edge=DAQProperty.get_trigger_edge(edge=self.trigger_config["edge"])
                 )
         except Exception as e:
             logging.exception(f"❌ Trigger configuration failed: {str(e)}")
@@ -311,10 +312,10 @@ class  AnalogOutputTask(DAQTask):
         """ Ensure data is in the correct shape (samples as rows, channels as columns) for DAQmx write
         """
 
-        # print(f"data shape before transpose = {data.shape}")
+        # printt(f"data shape before transpose = {data.shape}")
         if data.shape[0] != 3:  # Assuming 3 channels
             data = data.T
-        # print(f"data shape after transpose = {data.shape}")
+        # printt(f"data shape after transpose = {data.shape}")
 
         # Create a new array that is guaranteed to be C_CONTIGUOUS and WRITEABLE
         data_copy = np.array(data, dtype=np.float64, order='C', copy=True)
@@ -323,7 +324,7 @@ class  AnalogOutputTask(DAQTask):
         assert data_copy.flags['C_CONTIGUOUS'], "Array is not C_CONTIGUOUS"
         assert data_copy.flags['WRITEABLE'], "Array is not WRITEABLE"
 
-        # print(f"data_copy shape = {data_copy.shape}")
+        # printt(f"data_copy shape = {data_copy.shape}")
         return data_copy
 
     def set_outputs_to_constant(self, output_field_in_gauss: Union[Tuple[float], List[float]]):
@@ -338,17 +339,17 @@ class  AnalogOutputTask(DAQTask):
         # the convention for the input data structure (typically a 2D NumPy array) is [Channels, Samples]
 
         # Configures the task without a trigger and FINITE sample clock. Then writes the data. -- this was before.
-        print(f"> Setting to constant: {output_field_in_gauss} [gauss]")
+        printt(f"> Setting to constant: {output_field_in_gauss} [gauss]")
 
         output_field_in_gauss = [[i]*2 for i in output_field_in_gauss]  # create 2 samples for each channel
-        # print(np.array(output_field_in_gauss))
-        # print(AnalogOutputTask.coil_calibration(self.coil).T)
+        # printt(np.array(output_field_in_gauss))
+        # printt(AnalogOutputTask.coil_calibration(self.coil).T)
         output_voltage = AnalogOutputTask.prepare_data_for_write(np.array(output_field_in_gauss))
         output_voltage = np.divide(np.array(output_field_in_gauss), AnalogOutputTask.coil_calibration(self.coil))
-        # print(output_voltage)
+        # printt(output_voltage)
 
         # Stop the task
-        print(f"task state = {self._task_state}")
+        printt(f"task state = {self._task_state}")
         if self._task_state == "running":
             self._task.stop()
             self._task_state = "stopped"
@@ -367,7 +368,7 @@ class  AnalogOutputTask(DAQTask):
         
         # Write zeros to all channels
         # num_channels = len(task.ao_channels.channel_names)
-        # print(f"Data = {field_data}")
+        # printt(f"Data = {field_data}")
         try:
             self._task.write(output_voltage, auto_start=True)
         except Exception as e:
@@ -386,7 +387,7 @@ class  AnalogOutputTask(DAQTask):
         """configure the retriggerable output task"""
 
         self.samps_per_chan = np.max(data_shape)
-        self.sampling_rate = 100e3
+        self.sample_rate = 100e3
         # configure the retriggerable task
         try:
             if self._task_state == "running":
@@ -399,7 +400,7 @@ class  AnalogOutputTask(DAQTask):
 
             # Configure sample clock timing
             self._task.timing.cfg_samp_clk_timing(
-                rate = self.sampling_rate,
+                rate = self.sample_rate,
                 source = '',
                 active_edge = Edge.RISING,
                 sample_mode = AcquisitionType.FINITE,
@@ -407,23 +408,23 @@ class  AnalogOutputTask(DAQTask):
             )
 
             # check output buffer size
-            # print(f"Host Buff size = {self._task.out_stream.output_buf_size}")
+            # printt(f"Host Buff size = {self._task.out_stream.output_buf_size}")
             self._task.out_stream.output_buf_size = self.samps_per_chan
-            # print(f"Host Buff size = {self._task.out_stream.output_buf_size}")
-            # print(f"Onbrd Buff size = {self._task.out_stream.output_onbrd_buf_size}")
+            # printt(f"Host Buff size = {self._task.out_stream.output_buf_size}")
+            # printt(f"Onbrd Buff size = {self._task.out_stream.output_onbrd_buf_size}")
             
             # configure digital start trigger
             aoStartTrig = self._task.triggers.start_trigger      # get the start trigger configuration for the task
             aoStartTrig.cfg_dig_edge_start_trig(concfg.start_trig_terminal, Edge.RISING)
             aoStartTrig.retriggerable = True
-            # print(f"Retriggerable start trigger = {aoStartTrig.retriggerable}")
+            # printt(f"Retriggerable start trigger = {aoStartTrig.retriggerable}")
             
             # configure digital pause trigger
             # ao_pause_trig = ao_task.triggers.pause_trigger
             # ao_pause_trig.trig_type = TriggerType.DIGITAL_LEVEL
             # ao_pause_trig.dig_lvl_src = concfg.start_trig_terminal
             # ao_pause_trig.dig_lvl_when = Level.LOW
-            # print("> Retriggerable AO configured!!")
+            # printt("> Retriggerable AO configured!!")
             self._task_state = "configured"
         except Exception as e:
             self._task_state = "error"
@@ -442,79 +443,191 @@ class  AnalogOutputTask(DAQTask):
             # end_time = time.perf_counter_ns()
             actual_sampling_rate = self._task.timing.samp_clk_rate
 
-            # print(f"Actual samples written: {samples_written}")
-            # print(f" Set sampling rate = {1/dt:g} Sa/s")
-            # print(f"Actual sampling rate: {actual_sampling_rate:g} Sa/s")
+            # printt(f"Actual samples written: {samples_written}")
+            # printt(f" Set sample_clock rate = {1/dt:g} Sa/s")
+            # printt(f"Actual sample_clock rate: {actual_sampling_rate:g} Sa/s")
         except Exception as e:
             logging.exception(f"❌ \x1b[38;2;250;37;41mDAQmx Error: {e}")
         except KeyboardInterrupt:
             pass
 
-    # def voltage_to_current(self, output_field: list):
-    #     self.vi_calibration = np.array([[26.5, 26.8, 43.5]])
-    #     # calibration = [19,19,37]
-    #     output_aovoltage = output_field/self.calibration
-    #     return output_aovoltage
-
 class CounterInputTask(DAQTask):
-    def __init__(self, edge_config: str):
-        super().__init__()
-        self.edge_config = edge_config
-    
+    def __init__(self,
+                 dev: str = 'P6363',
+                 counter: str = "P6363/ctr0",
+                 channel: str = "/P6363/PFI7",
+                 sample_source: str = 'internal',
+                 sample_rate: float = 10e3,
+                 sample_mode: str = 'finite',
+                 samps_per_chan: int = 100,
+                 start_trigger_source: str = '',
+                 start_trigger_edge: str = "rising",
+                 pause_trigger_source: str = '',
+                 name: str = '',
+        ):
+        if name == '': name = f"task_{time.strftime('%H%M%S')}"
+        super().__init__(name)
+        self.dev: str = dev
+        self.counter: str = counter
+        self.channel: str = channel
+        self.sample_clock: dict = {
+            'source': '' if sample_source.lower() in ['internal', ''] else sample_source,
+            'edge': Edge.RISING.name,
+            'rate': sample_rate,
+            'mode': sample_mode,
+            'samps_per_chan': samps_per_chan,
+            }
+        # Trigger configuration
+        self.start_trigger: dict = {}
+        if start_trigger_source != '':
+            self.start_trigger = {
+                "type": "digital",
+                "source": start_trigger_source,
+                "edge": start_trigger_edge,
+                }
+        self.pause_trigger: dict = {}
+        if pause_trigger_source != '':
+            self.pause_trigger = {
+                "type": "digital",
+                "source": pause_trigger_source,
+                "level": Level.LOW,
+                }
+
+        self._task: nidaqmx.Task
+        self.configure()
+
     def configure(self):
-        # Specific counter input configuration
-        pass
+        try:
+            printt("Configuring Counter Input..")
+            self._task = nidaqmx.Task()
+            # Assign channel
+            channel = self._task.ci_channels.add_ci_count_edges_chan(
+                counter=self.counter, edge=Edge.RISING,
+                initial_count=0, count_direction=CountDirection.COUNT_UP
+            )
+            channel.ci_count_edges_term = self.channel
+            # Configure sample clock
+            self._task.timing.cfg_samp_clk_timing(
+                rate = self.sample_clock['rate'],
+                source = self.sample_clock['source'],
+                active_edge = DAQProperty.get_trigger_edge(edge=self.sample_clock['edge']),
+                sample_mode = DAQProperty.get_sampling_mode(mode=self.sample_clock['mode']),
+                samps_per_chan = int(self.sample_clock['samps_per_chan'])
+            )
+            self._configure_triggers()
+            
+            self._task_state = "configured"
+            self.get_attributes()
+            printt(f"✔ Counter Input configured: counter = {self.counter}, channel = {self.channel}!")
+            printt(f"Sampling config: {self.sample_clock}")
+            printt(f"Start config: {self.start_trigger}")
+            printt(f"Pause config: {self.pause_trigger}")
+        except Exception as e:
+            self._task_state = "error"
+            logging.exception(f"❌ Configuration failed: {str(e)}")
+            raise #RuntimeError(f"❌ Configuration failed: {str(e)}")
+
+    def _configure_triggers(self):
+        """Private method to handle trigger configuration"""
+        try:
+            # Arm start trigger
+            if self.start_trigger:
+                self._task.triggers.arm_start_trigger.trig_type = TriggerType.DIGITAL_EDGE
+                self._task.triggers.arm_start_trigger.dig_edge_src = self.start_trigger["source"]
+                self._task.triggers.arm_start_trigger.dig_edge_edge = DAQProperty.get_trigger_edge(edge=self.start_trigger["edge"])
+            
+            # Pause trigger
+            if self.pause_trigger:
+                self._task.triggers.pause_trigger.trig_type = TriggerType.DIGITAL_LEVEL
+                self._task.triggers.pause_trigger.dig_lvl_src = self.pause_trigger["source"]
+                self._task.triggers.pause_trigger.dig_lvl_when = self.pause_trigger["level"]
+
+        except Exception as e:
+            logging.exception(f"❌ Trigger configuration failed: {str(e)}")
+            raise #RuntimeError(f"Trigger configuration failed: {str(e)}")
+    
+    def get_attributes(self):
+        self.counter = self._task.ci_channels[0].name                   # type: ignore
+        self.channel = self._task.ci_channels[0].ci_count_edges_term    # type: ignore
+        if self.sample_clock:
+            self.sample_clock['source']         = self._task.timing.samp_clk_src
+            self.sample_clock['edge']           = self._task.timing.samp_clk_active_edge.name
+            self.sample_clock['rate']           = self._task.timing.samp_clk_rate
+            self.sample_clock['mode']           = self._task.timing.samp_quant_samp_mode.name
+            self.sample_clock['samps_per_chan'] = self._task.timing.samp_quant_samp_per_chan
+        if self.start_trigger:
+            self.start_trigger['type']      = self._task.triggers.arm_start_trigger.trig_type.name
+            self.start_trigger['source']    = self._task.triggers.arm_start_trigger.dig_edge_src
+            self.start_trigger['edge']      = self._task.triggers.arm_start_trigger.dig_edge_edge.name
+        if self.pause_trigger:
+            self.pause_trigger['type']      = self._task.triggers.pause_trigger.trig_type.name
+            self.pause_trigger['source']    = self._task.triggers.pause_trigger.dig_lvl_src
+            self.pause_trigger['level']     = self._task.triggers.pause_trigger.dig_lvl_when.name
+
+    def start(self):
+        try:
+            if self._task_state != "configured":
+                raise RuntimeError("Task must be configured before starting")
+            self._task.start()
+            self._task_state = "running"
+        except Exception as e:
+            self._task_state = "error"
+            logging.exception(f"❌ Start failed: {str(e)}")
+            raise #RuntimeError(f"❌ Start failed: {str(e)}")
+    
+    # TODO: CIChannel.ci_count: Indicates the current value of the count register: Need to reset the counter after 2**32
+    def read_daq(self,Nsamples,timeout=120.):
+        try:
+            counts = self._task.read(Nsamples, timeout)
+            counts = np.diff(counts, axis=0, prepend=0)
+        except Exception as excpt:
+            logging.exception(f'❌ Error: could not Read DAQ. Please check your DAQ\'s connections.\
+                  \nException details: \x1b[38;2;250;37;41m{str(type(excpt).__name__)}. {str(excpt)}\x1b[0m')
+            sys.exit()
+        return counts
+
+    def stop(self):
+        try:
+            if self._task_state == "running":
+                self._task.stop()
+                self._task_state = "stopped"
+        except Exception as e:
+            self._task_state = "error"
+            logging.exception(f"❌ Stop failed: {str(e)}")
+            raise #RuntimeError(f"❌ Stop failed: {str(e)}")
+    
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        try:
+            if hasattr(self, '_task') and self._task is not None:
+                if self._task_state == "running":
+                    self.stop()
+                self._task.close()
+        except Exception as e:
+            logging.exception(f"⚠ Warning: Error during cleanup: {str(e)}")
+
 
 # Configuration mapping
-class DAQConfiguration:
+class DAQProperty:
     SAMPLING_MODES = {
         "continuous": AcquisitionType.CONTINUOUS,
         "finite": AcquisitionType.FINITE,
-        "hwtimed": AcquisitionType.HW_TIMED_SINGLE_POINT
+        "hwtimed": AcquisitionType.HW_TIMED_SINGLE_POINT,
     }
-
-    START_TRIGGER_EDGE = {
+    TRIGGER_EDGE = {
         "rising": Edge.RISING,
-        "falling": Edge.FALLING
+        "falling": Edge.FALLING,
     }
 
     @classmethod
-    def get_sampling_mode(cls, mode_name: str) -> AcquisitionType:
-        return cls.SAMPLING_MODES.get(mode_name, AcquisitionType.FINITE)
+    def get_sampling_mode(cls, mode: str) -> AcquisitionType:
+        return cls.SAMPLING_MODES.get(mode.lower(), AcquisitionType.FINITE)
 
     @classmethod
-    def get_start_trigger_edge(cls, edge_name: str) -> Edge:
-        return cls.START_TRIGGER_EDGE.get(edge_name, Edge.RISING)
+    def get_trigger_edge(cls, edge: str) -> Edge:
+        return cls.TRIGGER_EDGE.get(edge.lower(), Edge.RISING)
 
-# Command pattern using dict
-class DAQCommander:
-    def __init__(self, task):
-        self.task = task
-        self.commands = {
-            "start": self.task.start,
-            "stop": self.task.stop,
-            "configure": self.task.configure,
-        }
 
-    def execute(self, command: str):
-        if command in self.commands:
-            self.commands[command]()
-        else:
-            raise ValueError(f"Unknown command: {command}")
-
-# Factory class to create appropriate task types
-class DAQTaskFactory:
-    @staticmethod
-    def create_task(task_type: str, **kwargs):
-        if task_type == "analog_input":
-            return AnalogInputTask(**kwargs)
-        elif task_type == "analog_output":
-            return AnalogOutputTask(**kwargs)
-        # elif task_type == "counter_input":
-        #     return CounterInputTask(**kwargs)
-        else:
-            raise ValueError(f"Unknown task type: {task_type}")
-    
 class DAQ_write_pattern():
 
     # def __init__(self):
@@ -529,7 +642,7 @@ class DAQ_write_pattern():
             return DAQ_write_pattern.triggered_ao_data_z(rot_angle, align_field, amp, freq)
 
     @staticmethod
-    def triggered_ao_data_z(rotation_angle:float, align_field:list, amp:float, freq:float=10, ax:plt.Axes=None):
+    def triggered_ao_data_z(rotation_angle:float, align_field:list, amp:float, freq:float=10, ax=None):
         """Generate the rotating field data pattern for control about z-axis
         
         Parameters
@@ -555,11 +668,11 @@ class DAQ_write_pattern():
         fig = plt.figure()
         title = f'{rotation_angle} deg of {freq} Hz theta_{theta} phi_{phi}'
         fig.suptitle(title)
-        fig.canvas.manager.set_window_title(title)
+        fig.canvas.manager.set_window_title(title)      # type: ignore
         
         #
-        sampling_rate = 100e3     # daq sampling rate
-        dt = 1/sampling_rate    # time diff between two samples, sampling time
+        sample_rate = 100e3     # daq sample_clock rate
+        dt = 1/sample_rate    # time diff between two samples, sample_clock time
         # n_points = (tf*freq - ti)/dt     # total points for the waveform
 
         linespec = '-'
@@ -595,7 +708,7 @@ class DAQ_write_pattern():
         t_array = np.hstack((t_array, temp))
 
         b2 = np.flip(b1, axis=0)    # b1[1:len(t_fraction)+1]
-        # print(b2.shape)
+        # printt(b2.shape)
         b2 = b2[1:,:]
         # b2 = np.transpose(np.array([np.nan_to_num(bx*bx[-1]/np.absolute(bx[-1]), nan=0.0), np.nan_to_num(by*by[-1]/np.absolute(by[-1]), nan=0.0), -bz]))
         # plt.figure(); plt.plot(b2)
@@ -684,8 +797,8 @@ class DAQ_write_pattern():
         fig.suptitle(title)
         fig.canvas.manager.set_window_title(title)
         #
-        sampling_rate = 100e3     # daq sampling rate
-        dt = 1/sampling_rate    # time diff between two samples, sampling time
+        sample_rate = 100e3     # daq sample_clock rate
+        dt = 1/sample_rate    # time diff between two samples, sample_clock time
 
         linespec = '-'
         fraction = rot_angle/360
@@ -716,7 +829,7 @@ class DAQ_write_pattern():
         t_array = np.hstack((t_array, temp))
 
         b2 = np.flip(b1, axis=0)    # b1[1:len(t_fraction)+1]
-        # print(b2.shape)
+        # printt(b2.shape)
         b2 = b2[1:,:]
         # b2 = np.transpose(np.array([np.nan_to_num(bx*bx[-1]/np.absolute(bx[-1]), nan=0.0), np.nan_to_num(by*by[-1]/np.absolute(by[-1]), nan=0.0), -bz]))
         # plt.figure(); plt.plot(b2)
@@ -775,7 +888,7 @@ class DAQ_write_pattern():
         return [dt, time_array, pattern_data]
     
     @staticmethod
-    def triggered_ao_data_dc(t_align:float, rotation_theta:float, rotation_phi:float, amp:float, ax:plt.Axes=None):
+    def triggered_ao_data_dc(t_align:float, rotation_theta:float, rotation_phi:float, amp:float, ax=None):
         """For demonstrating vector control of the propeller -> Bz - Bx - Bz - Bx -> rotation angle -> Test field
         The test field is written in mainControl.py
 
@@ -792,8 +905,8 @@ class DAQ_write_pattern():
         """
         N_aligns = 3        # number of Bz - Bx rotations
 
-        sampling_rate = 100e3     # daq sampling rate [Hz]
-        dt = 1/sampling_rate    # time diff between two samples, sampling time [s]
+        sample_rate = 100e3     # daq sample_clock rate [Hz]
+        dt = 1/sample_rate    # time diff between two samples, sample_clock time [s]
         t = np.arange(0, t_align/2, dt)       # incoming t_align in [s]
         
         # TODO: #5 This is either (Bz-Bx) or (Bz-By) alignment field.. Need (Bz - (aBx + bBy)) alignment field
@@ -854,7 +967,7 @@ class DAQ_write_pattern():
         pattern_data = pattern_data/AnalogOutputTask.coil_calibration(coil).T
         AnalogOutputTask.prepare_data_for_write(pattern_data)
         ao_task.create_retriggerable_ao_task(pattern_data.shape)
-        print("Starting pattern!")
+        printt("Starting pattern!")
         ao_task.start_retriggerable_ao_task(pattern_data)
 
 # def read_daq_counter(task):

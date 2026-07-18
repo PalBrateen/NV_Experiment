@@ -20,7 +20,7 @@ from nidaqmx.constants import AcquisitionType, TerminalConfiguration, Edge, Leve
 from PySide6.QtCore import QThread, Signal, QMutex, QMutexLocker, QTimer, QObject
 
 from scope_v2_core import (
-    ObservableConfig, AcquisitionConfig, ChannelConfig,
+    ObservableConfig, AcquisitionConfig, AIChannelConfig, CIChannelConfig,
     CircularBuffer, HAS_NIDAQMX,
     TriggerConfig, ClockConfig, TriggerMode, TriggerEdge, PauseWhen, ClockSource
 )
@@ -88,7 +88,7 @@ class AcquisitionThread(QThread):
                 if self.input_type == 'counter':
                     self._run_hardware_counter()
                 else:
-                    self._run_hardware()
+                    self._run_hardware_analog()
             else:
                 self._run_simulation()
             
@@ -97,7 +97,7 @@ class AcquisitionThread(QThread):
                 
         self.statusChanged.emit("Stopped")
         
-    def _run_hardware(self):
+    def _run_hardware_analog(self):
         """Hardware acquisition - reads chunks of fft_size samples"""
         config = self.obs_config.get_config()
         sample_rate = config.sample_rate
@@ -110,9 +110,9 @@ class AcquisitionThread(QThread):
         
         self.statusChanged.emit(f"Configuring... (chunk={chunk_size}, rate={natural_rate:.1f} Hz)")
         
-        task = None
+        input_task = None
         try:
-            task = nidaqmx.Task()
+            input_task = nidaqmx.Task()
             
             # Add channels
             enabled_channels = []
@@ -130,7 +130,7 @@ class AcquisitionThread(QThread):
                 }
                 term_cfg = term_map.get(ch_config.terminal_config, TerminalConfiguration.RSE)
                 
-                task.ai_channels.add_ai_voltage_chan(
+                input_task.ai_channels.add_ai_voltage_chan(
                     physical_channel=phys_chan,
                     terminal_config=term_cfg,
                     min_val=ch_config.min_voltage,
@@ -156,7 +156,7 @@ class AcquisitionThread(QThread):
                 clock_edge = Edge.RISING if clock_cfg.external_edge == TriggerEdge.RISING else Edge.FALLING
             
             # Configure timing - DAQ buffer = 4x chunk size
-            task.timing.cfg_samp_clk_timing(
+            input_task.timing.cfg_samp_clk_timing(
                 rate=clock_rate,
                 source=clock_source,
                 active_edge=clock_edge,
@@ -166,16 +166,16 @@ class AcquisitionThread(QThread):
             
             # Configure triggers
             if trigger_cfg.mode != TriggerMode.NONE:
-                self._configure_triggers(task, config.device, trigger_cfg)
+                self._configure_triggers(input_task, config.device, trigger_cfg)
             
-            task.start()
+            input_task.start()
             self.statusChanged.emit(f"Running | {sample_rate/1e3:.1f} kSa/s | {natural_rate:.1f} Hz update")
             
             # Main acquisition loop
             while not self._stop_requested and not self._restart_requested:
                 try:
                     # Read exactly chunk_size samples (blocks until ready)
-                    data = task.read(
+                    data = input_task.read(
                         number_of_samples_per_channel=chunk_size,
                         timeout=timeout
                     )
@@ -200,11 +200,15 @@ class AcquisitionThread(QThread):
                     
                     # Emit chunk for immediate display
                     self.chunkReady.emit(chunk_data)
-                    
                     self._total_samples += chunk_size
+
+                    print(f"Stop requested: {self._stop_requested}")
+                    print(f"Restart required: {self._restart_requested}")
                     
                 except daq_error.DaqReadError as e:
                     err_str = str(e).lower()
+                    print(f"Stop requested: {self._stop_requested}")
+                    print(f"Restart required: {self._restart_requested}")
                     if "timeout" in err_str:
                         self.statusChanged.emit("Waiting for data/trigger...")
                         continue
@@ -218,30 +222,27 @@ class AcquisitionThread(QThread):
             self.errorOccurred.emit(str(e))
             
         finally:
-            if task:
-                try:
-                    task.stop()
-                    task.close()
-                except:
-                    pass
+            if input_task:
+                try:    input_task.stop();  input_task.close()
+                except: pass
     
     def _run_hardware_counter(self):
         """Counter input acquisition - reads edge counts and converts to counts/second"""
         config = self.obs_config.get_config()
         sample_rate = config.sample_rate
-        chunk_size = self.chunk_size
+        chunk_size = int(self.chunk_size)
         
         # Calculate timing
         chunk_duration = chunk_size / sample_rate
-        bin_time = 1.0 / sample_rate  # Time per sample bin
+        bin_time = 1. / sample_rate  # Time per sample bin
         natural_rate = sample_rate / chunk_size
-        timeout = max(chunk_duration * 2, 1.0)
+        timeout = 60#max(chunk_duration * 2, 1.0)
         
         self.statusChanged.emit(f"Configuring counter... (chunk={chunk_size}, rate={natural_rate:.1f} Hz)")
         
-        task = None
+        input_task = None; clk_task = None
         try:
-            task = nidaqmx.Task()
+            input_task = nidaqmx.Task()
             
             # Get counter channel from first enabled channel config
             # Counter channels use format "Dev/ctr0", "Dev/ctr1" etc.
@@ -249,14 +250,13 @@ class AcquisitionThread(QThread):
             for i, ch_config in enumerate(config.channels):
                 if not ch_config.enabled:
                     continue
-                # For counter, physical_channel should be "ctr0", "ctr1", etc.
-                counter_chan = f"{config.device}/{ch_config.physical_channel}"
-                
+                assert type(ch_config) == CIChannelConfig
+                counter_chan = f"{ch_config.counter}"
+                print(f"Counter = {counter_chan}")
                 # Add counter edge counting channel
-                task.ci_channels.add_ci_count_edges_chan(
-                    counter=counter_chan,
-                    edge=nidaqmx.constants.Edge.RISING
-                )
+                input_task.ci_channels.add_ci_count_edges_chan(counter=counter_chan, edge=Edge.RISING)
+                input_task.ci_channels[0].ci_count_edges_term = f"/{config.device}/{ch_config.physical_channel}"
+                print(f"Input channel = {input_task.ci_channels[0].ci_count_edges_term}")
                 enabled_channels.append(i)
             
             if not enabled_channels:
@@ -266,27 +266,50 @@ class AcquisitionThread(QThread):
             # Configure sample clock timing
             clock_cfg = config.clock
             trigger_cfg = config.trigger
+            clock_rate = clock_cfg.rate
             
             if clock_cfg.source == ClockSource.INTERNAL:
-                clock_source = ""  # Use internal timebase (100MHz on X series)
-                clock_rate = clock_cfg.rate
+                # CO task: generate the sample clock
+                clk_task = nidaqmx.Task()
+                clk_task.co_channels.add_co_pulse_chan_freq(
+                    "P6363/ctr1",
+                    freq=clock_rate,
+                    duty_cycle=0.5,
+                )
+                clk_task.timing.cfg_implicit_timing(
+                    sample_mode=AcquisitionType.CONTINUOUS,  # continuous so it doesn't stop early
+                    samps_per_chan = 1000
+                )
+                clock_source = '/P6363/Ctr1InternalOutput'
             else:
                 clock_source = f"/{config.device}/{clock_cfg.external_source}"
-                clock_rate = clock_cfg.rate
             
             # Configure timing for buffered counter acquisition
-            task.timing.cfg_samp_clk_timing(
+            input_task.timing.cfg_samp_clk_timing(
                 rate=clock_rate,
-                source=clock_source if clock_source else None,
+                source=clock_source,
                 sample_mode=AcquisitionType.CONTINUOUS,
                 samps_per_chan=chunk_size * 4
             )
-            
+            print(f"Sample clock source = {input_task.timing.samp_clk_src}")
+            print(f"Chunk size = {self.chunk_size}, time = {chunk_duration}")
             # Configure triggers if needed
             if trigger_cfg.mode != TriggerMode.NONE:
-                self._configure_triggers(task, config.device, trigger_cfg)
+                self._configure_triggers(input_task, config.device, trigger_cfg)
+            else:
+                # if no triggers are provided, use sample clock as Arm Start Trigger
+                input_task.triggers.arm_start_trigger.trig_type = TriggerType.DIGITAL_EDGE
+                input_task.triggers.arm_start_trigger.dig_edge_src = clock_source
+                input_task.triggers.arm_start_trigger.dig_edge_edge = Edge.RISING
             
-            task.start()
+            try:
+                input_task.start()
+            except Exception as e:
+                print("Start error?")
+                self.errorOccurred.emit(f"Counter start error: {str(e)}")
+                self._stop_requested = True
+                print(f"Stop requested = {self._stop_requested}")
+                raise
             self.statusChanged.emit(f"Counter | {sample_rate/1e3:.1f} kSa/s | {natural_rate:.1f} Hz update")
             
             # Track last raw count for diff calculation
@@ -295,97 +318,86 @@ class AcquisitionThread(QThread):
             # Main acquisition loop
             while not self._stop_requested and not self._restart_requested:
                 try:
+                    print("Acquisition loop Started..")
                     # Read accumulated counts
-                    raw_counts = task.read(
+                    raw_counts = input_task.read(
                         number_of_samples_per_channel=chunk_size,
                         timeout=timeout
                     )
                     
                     raw_counts = np.array(raw_counts, dtype=np.int64)
-                    
+                    print(f"Raw counts shape = {raw_counts.shape}")
+                    chunk_data = {}
                     # Convert to counts per bin using diff
-                    if raw_counts.ndim == 1:
-                        # Single counter
-                        if last_counts is None:
-                            counts_per_bin = np.diff(raw_counts, prepend=raw_counts[0])
-                        else:
-                            counts_per_bin = np.diff(raw_counts, prepend=last_counts)
-                        last_counts = raw_counts[-1]
-                        
-                        # Handle 32-bit overflow (unlikely but safe)
-                        counts_per_bin[counts_per_bin < 0] += 2**32
-                        
-                        # Normalize to counts per second
-                        counts_per_second = counts_per_bin.astype(np.float32) / bin_time
-                        
-                        ch_idx = enabled_channels[0]
-                        chunk_data = {ch_idx: counts_per_second}
-                        if ch_idx in self.buffers:
-                            self.buffers[ch_idx].write(counts_per_second)
+                    # Only Single counter support
+                    if last_counts is None:
+                        counts_per_bin = np.diff(raw_counts, prepend=raw_counts[0])
                     else:
-                        # Multiple counters
-                        chunk_data = {}
-                        for buf_idx, ch_idx in enumerate(enabled_channels):
-                            raw_ch = raw_counts[buf_idx]
-                            if last_counts is None:
-                                counts_per_bin = np.diff(raw_ch, prepend=raw_ch[0])
-                            else:
-                                counts_per_bin = np.diff(raw_ch, prepend=last_counts[buf_idx] if last_counts is not None else raw_ch[0])
-                            
-                            counts_per_bin[counts_per_bin < 0] += 2**32
-                            counts_per_second = counts_per_bin.astype(np.float32) / bin_time
-                            
-                            chunk_data[ch_idx] = counts_per_second
-                            if ch_idx in self.buffers:
-                                self.buffers[ch_idx].write(counts_per_second)
-                        
-                        if raw_counts.ndim > 1:
-                            last_counts = raw_counts[:, -1]
-                        else:
-                            last_counts = raw_counts[-1]
+                        counts_per_bin = np.diff(raw_counts, prepend=last_counts)
+                    last_counts = raw_counts[-1]
+                    
+                    # Handle 32-bit overflow (unlikely but safe)
+                    counts_per_bin[counts_per_bin < 0] += 2**32
+                    
+                    # Normalize to counts per second
+                    counts_per_second = counts_per_bin.astype(np.float32) / bin_time
+                    
+                    ch_idx = enabled_channels[0]
+                    # chunk_data = {ch_idx: counts_per_second}
+                    chunk_data[ch_idx] = counts_per_second
+                    if ch_idx in self.buffers:
+                        self.buffers[ch_idx].write(counts_per_second)
                     
                     # Emit chunk for display
+                    print(f"Chunk = {chunk_data}")
                     self.chunkReady.emit(chunk_data)
                     self._total_samples += chunk_size
                     
                 except daq_error.DaqReadError as e:
                     err_str = str(e).lower()
                     if "timeout" in err_str:
+                        print("Timeout...")
                         continue
                     elif self._stop_requested or self._restart_requested:
+                        print(f"Stop requested = {self._stop_requested}")
+                        print(f"Restart requestd = {self._restart_requested}")
                         break
                     else:
                         self.errorOccurred.emit(f"Counter read error: {str(e)}")
+                        print(f"Counter read error: {str(e)}")
                         break
                     
         except Exception as e:
             traceback.print_exc()
+            print(f"Exception: {str(e)}")
             self.errorOccurred.emit(str(e))
             
         finally:
-            if task:
-                try:
-                    task.stop()
-                    task.close()
-                except:
-                    pass
+            if input_task :
+                try:    input_task.stop();  input_task.close()
+                except: pass
+            if clk_task:
+                try:    clk_task.stop();  clk_task.close()
+                except: pass                
     
-    def _configure_triggers(self, task, device: str, trigger_cfg: TriggerConfig):
+    def _configure_triggers(self, task: nidaqmx.Task, device: str, trigger_cfg: TriggerConfig):
         """Configure start and pause triggers"""
         
-        # Start trigger
+        # Start trigger: Arm start trigger
         if trigger_cfg.mode in [TriggerMode.START, TriggerMode.START_PAUSE]:
             start_source = f"/{device}/{trigger_cfg.start_source}"
             start_edge = Edge.RISING if trigger_cfg.start_edge == TriggerEdge.RISING else Edge.FALLING
             
-            task.triggers.start_trigger.cfg_dig_edge_start_trig(
-                trigger_source=start_source,
-                trigger_edge=start_edge
-            )
-            
-            if trigger_cfg.retriggerable:
-                task.triggers.start_trigger.retriggerable = True
+            task.triggers.arm_start_trigger.trig_type = TriggerType.DIGITAL_EDGE
+            task.triggers.arm_start_trigger.dig_edge_src = start_source
+            task.triggers.arm_start_trigger.dig_edge_edge = start_edge
         
+        else:
+            # if start trigger is not specified, use 1st edge of sample clock as start trigger
+            task.triggers.arm_start_trigger.trig_type = TriggerType.DIGITAL_EDGE
+            task.triggers.arm_start_trigger.dig_edge_src = task.timing.samp_clk_src
+            task.triggers.arm_start_trigger.dig_edge_edge = Edge.RISING
+
         # Pause trigger
         if trigger_cfg.mode == TriggerMode.START_PAUSE:
             pause_source = f"/{device}/{trigger_cfg.pause_source}"

@@ -15,7 +15,7 @@ Changes from v2.0:
   - Fixed double QApplication.quit() in closeEvent path
   - Minor code cleanup and documentation improvements
 """
-import logging, numpy as np, cv2, sys, time, matplotlib.pyplot as plt, dcamcon, connectionConfig as concfg
+import logging, numpy as np, cv2, sys, time, matplotlib.pyplot as plt, dcamcon
 from screeninfo import get_monitors
 from PBcontrol import PulseBlaster, ns, ms, us, Inst
 from DAQcontrol import AnalogOutputTask

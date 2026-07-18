@@ -13,6 +13,10 @@ Author: BP Lab
 Date: 2025
 """
 # TODO: channel-wise offset inputs needed
+# TODO: Resolve counter input hangup issue: due to high chunk size
+# TODO: Utilize "internal" trigger mode and use digital lines inside the DAQ to acquire counter input as free running instead of PB triggers
+# TODO: Resolve state saves for all controls
+# TODO: Resolve the console
 
 import sys, numpy as np, gc, pyqtgraph as pg, ctypes, psutil, json, h5py, os
 from typing import Optional, Dict, List
@@ -23,13 +27,13 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QSpinBox, QDoubleSpinBox,
     QGroupBox, QComboBox, QTabWidget, QDockWidget, QStatusBar,
-    QScrollArea, QToolButton, QSlider, QCheckBox, QFileDialog
+    QScrollArea, QToolButton, QSlider, QCheckBox, QFileDialog, QStackedWidget
 )
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal, QByteArray
 from PySide6.QtGui import QColor, QPalette, QPainter, QFontMetrics, QIcon
 
 from scope_v2_core import (
-    ObservableConfig, ChannelConfig, AcquisitionConfig,
+    ObservableConfig, AIChannelConfig, CIChannelConfig, AcquisitionConfig,
     CircularBuffer, enumerate_devices, get_device_info, DAQDeviceInfo,
     TriggerConfig, ClockConfig, TriggerMode, TriggerEdge, PauseWhen, ClockSource
 )
@@ -39,15 +43,13 @@ from scope_v2_widgets import (
     FFTWidget, ChannelConfigWidget, FFTDisplayMode, FrequencyUnit
 )
 
-try:
-    from qtconsole.rich_ipython_widget import RichIPythonWidget
-    from qtconsole.inprocess import QtInProcessKernelManager
-    HAS_IPYTHON = True
-except ImportError:
-    HAS_IPYTHON = False
+from qtconsole.rich_ipython_widget import RichIPythonWidget
+from qtconsole.inprocess import QtInProcessKernelManager
 
 expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')     # absolute path to the directory
 sys.path.append(expt_dir)   # Add to sys.path
+WORKING_DIRECTORY = r'D:\Brateen\Saved_Data\SavedStates\ScopeStates'  # Default working directory for state files
+DEFAULT_STATE_FILE = 'last_state.json'
 
 DARK_STYLE = """
 QMainWindow,QWidget{background-color:#1e1e1e;color:#d4d4d4;font-family:'Segoe UI',Arial,sans-serif;}
@@ -233,29 +235,13 @@ class ControlTab(QWidget):
         acq_layout.addWidget(self.buffer_info, 4, 0, 1, 2)
         layout.addWidget(acq_group)
         
-        chan_group = QGroupBox("Channels")
-        self.chan_layout = QVBoxLayout(chan_group)
-        chan_btn_layout = QHBoxLayout()
-        self.add_chan_btn = QPushButton("+ Add")
-        self.add_chan_btn.clicked.connect(self._add_channel)
-        chan_btn_layout.addWidget(self.add_chan_btn)
-        self.remove_chan_btn = QPushButton("- Remove")
-        self.remove_chan_btn.clicked.connect(self._remove_channel)
-        chan_btn_layout.addWidget(self.remove_chan_btn)
-        # chan_btn_layout.addStretch()
-        self.chan_layout.addLayout(chan_btn_layout)
+        self.chan_group = QGroupBox("Channels")     # The Group Box wrapper
+        chan_grp_layout = QVBoxLayout(self.chan_group)
+        layout.addWidget(self.chan_group)
 
-        self.chan_scroll = QScrollArea()
-        self.chan_scroll.setWidgetResizable(True)
-        self.chan_scroll.setMinimumHeight(100)
-        self.chan_scroll.setMaximumHeight(250)
-        self.chan_container = QWidget()
-        self.chan_container_layout = QVBoxLayout(self.chan_container)
-        self.chan_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.chan_scroll.setWidget(self.chan_container)
-        self.chan_layout.addWidget(self.chan_scroll)
-        layout.addWidget(chan_group)
-        
+        self.stacked_widget = QStackedWidget()      # Stacked Widget inside the Group Box
+        chan_grp_layout.addWidget(self.stacked_widget)
+
         layout.addStretch()
         display_group = QGroupBox("Display")
         display_layout = QGridLayout(display_group)
@@ -276,8 +262,10 @@ class ControlTab(QWidget):
         display_layout.addWidget(self.clear_trends_btn, 1, 2, 1, 2)
         layout.addWidget(display_group)
         
-        
         self._refresh_devices()
+        # Create and add the two distinct cases
+        self.setup_analog_channels(parent_layout=self.stacked_widget)
+        self.setup_counter_channels(parent_layout=self.stacked_widget)
         self._add_channel()
         self._update_buffer_info()
         
@@ -311,10 +299,11 @@ class ControlTab(QWidget):
         devices = enumerate_devices()
         self.device_combo.addItems(devices if devices else ["No devices"])
         if devices: self._on_device_changed(devices[0])
-            
+    
     def _on_device_changed(self, name: str):
         self.obs_config.device = name
         self.device_info = get_device_info(name)
+        assert self.device_info
         for w in self.channel_widgets: w.update_device_info(self.device_info)
         # Emit signal with device info for other components (like trigger tab)
         if self.device_info:
@@ -359,6 +348,7 @@ class ControlTab(QWidget):
         """Handle input type change (Analog/Counter)"""
         input_type = 'analog' if index == 0 else 'counter'
         self.inputTypeChanged.emit(input_type)
+        self.stacked_widget.setCurrentIndex(index)
     
     def get_input_type(self) -> str:
         """Get current input type: 'analog' or 'counter'"""
@@ -393,7 +383,7 @@ class ControlTab(QWidget):
         w = ChannelConfigWidget(idx, self.device_info)
         w.configChanged.connect(self._on_channel_changed)
         self.channel_widgets.append(w)
-        self.chan_container_layout.addWidget(w)
+        self.chan_layout.addWidget(w)
         self.obs_config.add_channel(w.get_config())
         
     def _remove_channel(self):
@@ -404,11 +394,63 @@ class ControlTab(QWidget):
             self.obs_config._config.channels.pop()
             self.channelRemoved.emit(removed_idx)  # Notify to remove curves
             
-    def _on_channel_changed(self, idx: int, config: ChannelConfig):
+    def _on_channel_changed(self, idx: int, config: AIChannelConfig):
         self.obs_config.update_channel(idx, config)
         
-    def get_all_configs(self) -> List[ChannelConfig]:
+    def setup_analog_channels(self, parent_layout: QStackedWidget):
+        self.chan_scroll = QScrollArea()
+        self.chan_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self.chan_scroll.setWidgetResizable(True)
+        self.chan_scroll.setMinimumHeight(100)
+        self.chan_scroll.setMaximumHeight(250)
+        self.chan_container = QWidget()         # container widget inside the scroll area
+        self.chan_container_layout = QVBoxLayout(self.chan_container)
+        self.chan_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.chan_container_layout.addStretch()
+        self.chan_scroll.setWidget(self.chan_container)
+        
+        widget = QWidget()
+        self.chan_layout = QVBoxLayout(widget)
+        chan_btn_layout = QHBoxLayout()
+        self.add_chan_btn = QPushButton("+ Add")
+        self.add_chan_btn.clicked.connect(self._add_channel)
+        chan_btn_layout.addWidget(self.add_chan_btn)
+        self.remove_chan_btn = QPushButton("- Remove")
+        self.remove_chan_btn.clicked.connect(self._remove_channel)
+        chan_btn_layout.addWidget(self.remove_chan_btn)
+        self.chan_layout.addLayout(chan_btn_layout)
+        self.chan_scroll.setWidget(widget)      # Bind widget to the scroll area
+        parent_layout.addWidget(self.chan_scroll)
+
+    def setup_counter_channels(self, parent_layout: QStackedWidget):
+        widget = QWidget()
+        assert self.device_info
+        self.counter_layout = QVBoxLayout(widget)
+        
+        sub_layout = QHBoxLayout();     sub_layout.addWidget(QLabel("Counter"))
+        self.counter_combo = QComboBox();    self.counter_combo.addItems(self.device_info.counters)
+        sub_layout.addWidget(self.counter_combo)
+        self.counter_layout.addLayout(sub_layout)
+        sub_layout = QHBoxLayout();     sub_layout.addWidget(QLabel("Input Channel"))
+
+        self.input_channels = QComboBox()
+        self.input_channels.addItems(self.device_info.pfi_terminals)
+        sub_layout.addWidget(self.input_channels)
+        self.counter_layout.addLayout(sub_layout)
+        self.counter_layout.addStretch()
+        parent_layout.addWidget(widget)
+        
+    def get_ai_configs(self) -> List[AIChannelConfig]:
         return [w.get_config() for w in self.channel_widgets]
+    
+    def get_ci_config(self) -> List[CIChannelConfig]:
+        return [CIChannelConfig(
+            counter=self.counter_combo.currentText(),
+            physical_channel=self.input_channels.currentText(),
+            color="#00BFFF",
+            enabled=True,
+            name=f"Channel 1",
+        )]
         
     def set_running(self, running: bool):
         """Update UI state based on running status"""
@@ -990,11 +1032,7 @@ class IPythonWidget(QWidget):
         self._setup_ui()
         
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        if not HAS_IPYTHON:
-            layout.addWidget(QLabel("IPython not available\npip install qtconsole"))
-            return
+        layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0)
         self.kernel_mgr = QtInProcessKernelManager()
         self.kernel_mgr.start_kernel()
         self.kernel_client = self.kernel_mgr.client()
@@ -1002,14 +1040,16 @@ class IPythonWidget(QWidget):
         self.console = RichIPythonWidget()
         self.console.kernel_manager = self.kernel_mgr
         self.console.kernel_client = self.kernel_client
-        self.console.setStyleSheet("QPlainTextEdit, QTextEdit { background-color: #002b36; color: #839496; font-family: 'Consolas', monospace; font-size: 10pt; }")
-        self.console.syntax_style = 'monokai'
-        layout.addWidget(self.console)
+        self.console.setStyleSheet(     # type: ignore
+            """QPlainTextEdit, QTextEdit { background-color: #002b36;
+            color: #839496; font-family: 'Consolas', monospace; font-size: 10pt; }""")
+        self.console.syntax_style = 'monokai'       # type: ignore
+        layout.addWidget(self.console)              # type: ignore
         self.kernel_mgr.kernel.shell.push(self.namespace)
         self.console.execute('print("Scope Viewer v2 Console\\nObjects: scope, config, display, np")')
         
     def update_namespace(self, key: str, value):
-        if HAS_IPYTHON: self.kernel_mgr.kernel.shell.push({key: value})
+        self.kernel_mgr.kernel.shell.push({key: value})
 
 
 class ScopeViewerV2(QMainWindow):
@@ -1026,6 +1066,7 @@ class ScopeViewerV2(QMainWindow):
         self.fft_mode = False
         self._hdf_file = None
         self._input_type = 'analog'  # 'analog' or 'counter'
+        self.docks: dict = {}
         
         # Single acquisition mode state
         self._single_mode = False
@@ -1034,6 +1075,7 @@ class ScopeViewerV2(QMainWindow):
         
         self._setup_menus()
         self._setup_ui()
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._connect_signals()
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -1192,12 +1234,14 @@ class ScopeViewerV2(QMainWindow):
         QVBoxLayout(central)
         
         self.scope_dock = QDockWidget("Scope", self)
+        self.docks['scope'] = self.scope_dock; self.scope_dock.setObjectName('scope')
         self.scope_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetFloatable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.scope_widget = ScopeWidget()
         self.scope_dock.setWidget(self.scope_widget)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.scope_dock)
         
         self.fft_dock = QDockWidget("FFT", self)
+        self.docks['fft'] = self.fft_dock; self.fft_dock.setObjectName('fft')
         self.fft_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetFloatable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.fft_widget = FFTWidget()
         self.fft_dock.setWidget(self.fft_widget)
@@ -1205,13 +1249,15 @@ class ScopeViewerV2(QMainWindow):
         self.fft_dock.hide()
         
         self.trends_dock = QDockWidget("Trends", self)
+        self.docks['trends'] = self.trends_dock; self.trends_dock.setObjectName('trends')
         self.trends_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetFloatable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self.trends_widget = TrendsWidget(max_seconds=60.0)
+        self.trends_widget = TrendsWidget(max_seconds=20.0)
         self.trends_dock.setWidget(self.trends_widget)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.trends_dock)
         self.trends_dock.hide()
         
         self.control_dock = QDockWidget("Control", self)
+        self.docks['control'] = self.control_dock; self.control_dock.setObjectName('control')
         self.control_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetFloatable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         
         # Main container for control dock
@@ -1268,6 +1314,7 @@ class ScopeViewerV2(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.control_dock)
         
         self.console_dock = QDockWidget("Console", self)
+        self.docks['console'] = self.console_dock; self.console_dock.setObjectName('console')
         self.console_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetFloatable | QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.console_widget = IPythonWidget({'scope': self, 'config': self.obs_config, 'np': np})
         self.console_dock.setWidget(self.console_widget)
@@ -1403,8 +1450,13 @@ class ScopeViewerV2(QMainWindow):
     def start(self):
         if self.acq_thread and self.acq_thread.isRunning(): 
             return
-            
-        configs = self.control_tab.get_all_configs()
+        
+        if self._input_type == 'analog':
+            configs = self.control_tab.get_ai_configs()
+            print(configs)
+        else:
+            configs = self.control_tab.get_ci_config()
+            print(configs)
         self.obs_config._config.channels = configs
         
         # Get trigger and clock config
@@ -1463,9 +1515,8 @@ class ScopeViewerV2(QMainWindow):
         power_correction = self.fft_tab.is_power_correction()
         self.display_mgr.set_power_correction(power_correction)
         self.fft_widget.set_power_correction(power_correction)
-        
-        if HAS_IPYTHON: 
-            self.console_widget.update_namespace('display', self.display_mgr)
+         
+        self.console_widget.update_namespace('display', self.display_mgr)
         
         if self.control_tab.trends_toggle.isChecked(): 
             self.trends_widget.start()
@@ -1583,15 +1634,14 @@ class ScopeViewerV2(QMainWindow):
     def _on_input_type_changed(self, input_type: str):
         """Handle input type change (analog/counter)"""
         self._input_type = input_type
-        
         # Update Y-axis labels based on input type
         if input_type == 'counter':
-            self.scope_widget.setLabel('left', 'Count Rate', 'Hz')
+            self.scope_widget.setLabel(axis='left', text='Count Rate', units='Hz')
             self.trends_widget.setLabel('left', 'Count Rate', 'Hz')
             self.error_label.set_msg("Input: Counter (Edges)", error=False)
         else:
             self.scope_widget.setLabel('left', 'Voltage', 'V')
-            self.trends_widget.setLabel('left', 'Value', 'µV')
+            self.trends_widget.setLabel('left', 'Value', 'V')
             self.error_label.set_msg("Input: Analog (Voltage)", error=False)
             
     def _update_info_labels(self):
@@ -1760,13 +1810,13 @@ class ScopeViewerV2(QMainWindow):
     
     def get_state_directory(self) -> Path:
         """Get the directory for state files"""
-        state_dir = Path.home() / "NVExperiment" / "ScopeStates"
+        state_dir = Path(WORKING_DIRECTORY)
         state_dir.mkdir(parents=True, exist_ok=True)
         return state_dir
     
-    def save_state(self, filepath: Optional[str] = None):
+    def save_state(self, filepath: str|Path = ''):
         """Save current GUI state to JSON file"""
-        if filepath is None:
+        if filepath == '':
             filepath, _ = QFileDialog.getSaveFileName(
                 self, "Save State", str(self.get_state_directory()),
                 "JSON Files (*.json)"
@@ -1778,8 +1828,12 @@ class ScopeViewerV2(QMainWindow):
         if not filepath.suffix:
             filepath = filepath.with_suffix('.json')
         
+        # Convert binary QByteArray to Python strings using Base64
+        geometry_b64 = bytes(self.saveGeometry().toBase64()).decode('utf-8')    # type: ignore
+        state_b64 = bytes(self.saveState().toBase64()).decode('utf-8')      # type: ignore
+        dynamic_ids = list(self.docks.keys())   # Collect IDs of all dynamic docks currently alive
+
         state = {
-            'version': '2.0',
             'timestamp': datetime.now().isoformat(),
             'acquisition': {
                 'device': self.obs_config.device,
@@ -1794,7 +1848,7 @@ class ScopeViewerV2(QMainWindow):
                     'max_voltage': ch.max_voltage,
                     'terminal_config': ch.terminal_config,
                 }
-                for ch in self.control_tab.get_all_configs()
+                for ch in self.control_tab.get_ai_configs()
             ],
             'scope': {
                 'points': self.scope_tab.get_points(),
@@ -1824,11 +1878,10 @@ class ScopeViewerV2(QMainWindow):
                 'trends_length': self.control_tab.trends_length.currentText(),
             },
             'window': {
-                'width': self.width(),
-                'height': self.height(),
-                'x': self.x(),
-                'y': self.y(),
-            }
+                "geometry": geometry_b64,
+                "windowState": state_b64,
+                "docks": dynamic_ids
+            },
         }
         
         with open(filepath, 'w') as f:
@@ -1837,9 +1890,30 @@ class ScopeViewerV2(QMainWindow):
         self.status_bar.showMessage(f"State saved to {filepath.name}", 3000)
         print(f"✓ State saved to {filepath}")
     
-    def load_state(self, filepath: Optional[str] = None):
+    def load_docks(self, dock_id=None):
+        """Creates a dynamic dock. If no ID is passed, it generates a new one."""
+        if not dock_id:
+            # Generate a new unique ID based on current count
+            dock_id = f"dynamic_dock_{len(self.docks) + 1}"
+            
+        # Prevent duplicates
+        if dock_id in self.docks:
+            return self.docks[dock_id]
+            
+        dock = QDockWidget(f"Dynamic: {dock_id}", self)
+        dock.setObjectName(dock_id) # Crucial for restoreState
+        # dock.setWidget(QTextEdit(f"Content for {dock_id}"))
+        
+        # Handle cleanup if user clicks 'X' to close the dock completely
+        dock.allowedAreas() 
+        
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.docks[dock_id] = dock
+        return dock
+
+    def load_state(self, filepath: str|Path = ''):
         """Load GUI state from JSON file"""
-        if filepath is None:
+        if filepath == '':
             filepath, _ = QFileDialog.getOpenFileName(
                 self, "Load State", str(self.get_state_directory()),
                 "JSON Files (*.json)"
@@ -1927,11 +2001,21 @@ class ScopeViewerV2(QMainWindow):
                 self.control_tab.trends_toggle.setChecked(disp.get('trends_visible', False))
                 self.control_tab.trends_length.setCurrentText(disp.get('trends_length', '60 s'))
             
-            # Window geometry
+            # Window and dock geometry
             if 'window' in state:
                 win = state['window']
-                self.resize(win.get('width', 1600), win.get('height', 900))
-                self.move(win.get('x', 100), win.get('y', 100))
+                # Recreate the dynamic docks FIRST so restoreState can find them
+                for dock_id in win.get("docks", []):
+                    self.load_docks(dock_id)
+                    
+                # Decode Base64 strings back into QByteArray
+                if "geometry" in win:
+                    geo_array = QByteArray.fromBase64(win["geometry"].encode('utf-8'))
+                    self.restoreGeometry(geo_array)
+                    
+                if "windowState" in win:
+                    state_array = QByteArray.fromBase64(win["windowState"].encode('utf-8'))
+                    self.restoreState(state_array)
             
             self.status_bar.showMessage(f"State loaded from {filepath.name}", 3000)
             print(f"✓ State loaded from {filepath}")
@@ -1944,7 +2028,7 @@ class ScopeViewerV2(QMainWindow):
     # HDF5 DATA STREAMING
     # =========================================================================
     
-    def start_hdf_stream(self, filepath: Optional[str] = None):
+    def start_hdf_stream(self, filepath: str|Path|None = None):
         """Start streaming data to HDF5 file"""
         if filepath is None:
             default_name = f"scope_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
@@ -1975,7 +2059,7 @@ class ScopeViewerV2(QMainWindow):
         
         # Initialize datasets (extendable)
         self._hdf_trends_idx = 0
-        n_channels = sum(1 for c in self.control_tab.get_all_configs() if c.enabled)
+        n_channels = sum(1 for c in self.control_tab.get_ai_configs() if c.enabled)
         self._hdf_trends_grp.create_dataset(
             'timestamps', shape=(0,), maxshape=(None,), dtype='f8'
         )
@@ -2018,20 +2102,20 @@ class ScopeViewerV2(QMainWindow):
             std_ds = self._hdf_trends_grp['std']
             
             # Resize
-            new_size = ts_ds.shape[0] + 1
-            ts_ds.resize(new_size, axis=0)
-            mean_ds.resize(new_size, axis=0)
-            std_ds.resize(new_size, axis=0)
+            new_size = ts_ds.shape[0] + 1           # type: ignore
+            ts_ds.resize(new_size, axis=0)          # type: ignore
+            mean_ds.resize(new_size, axis=0)        # type: ignore
+            std_ds.resize(new_size, axis=0)         # type: ignore
             
             # Write data
-            ts_ds[-1] = stats.get('timestamp', datetime.now().timestamp())
-            mean_ds[-1, :len(stats['mean'])] = stats['mean']
-            std_ds[-1, :len(stats['std'])] = stats['std']
+            ts_ds[-1] = stats.get('timestamp', datetime.now().timestamp())      # type: ignore
+            mean_ds[-1, :len(stats['mean'])] = stats['mean']                    # type: ignore
+            std_ds[-1, :len(stats['std'])] = stats['std']                       # type: ignore
             
         except Exception as e:
             print(f"Error streaming to HDF5: {e}")
     
-    def save_current_scope_data(self, filepath: Optional[str] = None):
+    def save_current_scope_data(self, filepath: str|Path|None = None):
         """Save current scope buffer to HDF5 file"""
         if not self.buffers:
             self.status_bar.showMessage("No data to save", 3000)
@@ -2070,7 +2154,7 @@ class ScopeViewerV2(QMainWindow):
         self.status_bar.showMessage(f"Scope data saved: {filepath.name}", 3000)
         print(f"✓ Scope data saved to {filepath}")
     
-    def save_current_fft_data(self, filepath: Optional[str] = None):
+    def save_current_fft_data(self, filepath: str|Path|None = None):
         """Save current FFT data to HDF5 file"""
         if not self.fft_widget._channel_data:
             self.status_bar.showMessage("No FFT data to save", 3000)
@@ -2112,7 +2196,7 @@ class ScopeViewerV2(QMainWindow):
         self.stop_hdf_stream()
         # Auto-save state on close
         try:
-            auto_save_path = self.get_state_directory() / "last_state.json"
+            auto_save_path = Path(WORKING_DIRECTORY) / DEFAULT_STATE_FILE
             self.save_state(str(auto_save_path))
         except:
             pass
@@ -2152,7 +2236,7 @@ def main():
 
     window = ScopeViewerV2()
 
-    app_icon = QIcon(expt_dir + r"\gui\daq\gui_icon1.png") # .ico is preferred for Windows
+    app_icon = QIcon(expt_dir + r"\gui\daq\gui_icon.png")
     window.setWindowIcon(app_icon)
     app.setWindowIcon(app_icon) # Sets it for the whole application
 

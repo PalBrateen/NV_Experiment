@@ -31,6 +31,7 @@ from PySide6.QtGui import QPalette, QColor, QFont, QIcon, QPainter, QFontMetrics
 expt_dir = os.path.abspath(r'D:\Brateen\NV_Experiment')    #absolute path to the directory containing the module
 sys.path.append(expt_dir)      # Add the directory to sys.path
 from SGcontrol import SignalGenerator, ModulationFunction, ModulationType, SGDISPLAY, ErrorCodes    # Import the module
+from experiment_config import SG_ADDR
 
 # =============================================================================
 # CONFIGURATION
@@ -1742,8 +1743,7 @@ QGroupBox::title {
             try:
                 # Initialize hardware connection if not already done
                 if not hasattr(self.sg, '_instr') or self.sg._instr is None:
-                    from connectionConfig import sg_addr
-                    self.sg.init(sg_addr)
+                    self.sg.init(SG_ADDR)
                 
                 if init_with_gui:
                     # Push GUI values TO the signal generator
@@ -1771,8 +1771,7 @@ QGroupBox::title {
                 if init_with_gui:
                     # Create SG without auto-init, then push GUI values
                     self.sg = SignalGenerator(auto_init_hardware=False)
-                    from connectionConfig import sg_addr
-                    self.sg.init(sg_addr)
+                    self.sg.init(SG_ADDR)
                     self._connected = True
                     self._address = getattr(self.sg, 'addr', 'Unknown')
                     self._connect_signals()

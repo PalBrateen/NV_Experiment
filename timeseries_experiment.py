@@ -28,24 +28,20 @@ From a script (standalone):
     exp.save('ts_data')
     exp.teardown()
 """
-
-import numpy as np
-import time
-import logging
+# TODO: For internal sampling (@ 2 MSa/s), the acquisition rate >> read rate. Check how to adjust the buffer, or switch to callback mode instead of loop mode.
+import numpy as np, time, logging
 from pathlib import Path
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Optional, Callable
 from dataclasses import dataclass
-
-from PySide6.QtCore import QObject, Signal, QThread, QMutex, QMutexLocker, QTimer
-
-import connectionConfig as concfg
+from PySide6.QtCore import QObject, Signal, QThread, QMutex, QMutexLocker, QTimer, Qt
 from PBcontrol import PulseBlaster
 from experiment_base import calc_contrast, read_details, savefile
 from ring_buffer import RingBuffer
+from experiment_config import ExperimentConfig
+from DAQcontrol import AnalogInputTask, AnalogOutputTask, CounterInputTask
 
-if TYPE_CHECKING:
-    from experiment_config import ExperimentConfig
-
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Contrast Processor (from ts_prototype, adapted)
@@ -120,7 +116,7 @@ class TSWorker(QObject):
 #  Polling DAQ Thread (from ts_prototype, adapted for PB sample clock)
 # ═══════════════════════════════════════════════════════════════════════
 
-class TSPollingThread(QThread):
+class AnalogPollingThread(QThread):
     """Continuous DAQ acquisition using blocking task.read() in a loop.
 
     Configured for external sample clock (PB) + start trigger.
@@ -129,76 +125,60 @@ class TSPollingThread(QThread):
     DAQ samples.
     """
 
-    def __init__(self, worker: TSWorker, channel: str,
-                 sample_rate: float, chunk_size: int,
-                 buffer_size: int,
-                 voltage_range: tuple[float, float] = (-10, 10),
-                 sampling_source: str = '',
+    def __init__(self, worker: TSWorker,
+                 channels: list[int],
+                 sample_rate: float,
+                 chunk_size: int, buffer_size: int,
+                 voltage_ranges: list[tuple[float, float]] = [(-1., 1.)],
+                 sample_source: str = '',
                  start_trigger_source: str = '',
+                 start_trigger_edge: str = "rising",       # Only used if start_trigger_source exists
+                 pause_trigger_source: str = '',
                  parent=None):
         super().__init__(parent)
         self.worker = worker
-        self.channel = channel
-        self.sample_rate = sample_rate
-        self.chunk_size = chunk_size
-        self.buffer_size = buffer_size
-        self.voltage_range = voltage_range
-        self.sampling_source = sampling_source
+        self.channels = channels;       self.voltage_ranges = voltage_ranges
+        self.sample_rate = sample_rate; self.sample_source = sample_source
+        self.chunk_size = chunk_size;   self.buffer_size = buffer_size
         self.start_trigger_source = start_trigger_source
+        self.start_trigger_edge = start_trigger_edge
+        self.pause_trigger_source = pause_trigger_source
         self._stop_requested = False
         self._mutex = QMutex()
+        self.input_task: AnalogInputTask
 
     def request_stop(self):
         with QMutexLocker(self._mutex):
             self._stop_requested = True
 
     def run(self):
-        import nidaqmx
-        from nidaqmx.constants import AcquisitionType
-
         chunk_duration = self.chunk_size / max(self.sample_rate, 1)
-        timeout = max(chunk_duration * 5, 5.0)
+        timeout = max(chunk_duration * 5, 10.0)
 
-        self.worker.status.emit(
-            f'TS Polling | {self.sample_rate/1e3:.1f} kSa/s '
-            f'| chunk={self.chunk_size} | buf={self.buffer_size}')
+        self.worker.status.emit(f'TS Polling | {self.sample_rate/1e3:.1f} kSa/s '
+                                f'| chunk={self.chunk_size} | buf={self.buffer_size}')
 
-        task = None
         try:
-            task = nidaqmx.Task('ts_experiment_ai')
-            task.ai_channels.add_ai_voltage_chan(
-                self.channel,
-                min_val=self.voltage_range[0],
-                max_val=self.voltage_range[1],
-            )
-            task.timing.cfg_samp_clk_timing(
-                rate=self.sample_rate,
-                sample_mode=AcquisitionType.CONTINUOUS,
-                samps_per_chan=self.buffer_size,
-            )
-
-            # External sample clock from PB (if configured)
-            if self.sampling_source:
-                task.timing.samp_clk_src = self.sampling_source
-
-            # Start trigger from PB
-            if self.start_trigger_source:
-                task.triggers.start_trigger.cfg_dig_edge_start_trig(
-                    self.start_trigger_source)
-
-            task.start()
+            self.input_task = AnalogInputTask(dev="P6363",
+                                              channels=self.channels,
+                                              voltage_ranges=self.voltage_ranges,
+                                              sample_source=self.sample_source,
+                                              sample_rate=self.sample_rate,
+                                              sample_mode='continuous',
+                                              samps_per_chan=self.buffer_size,
+                                              start_trigger_source=self.start_trigger_source,
+                                              pause_trigger_source=self.pause_trigger_source,
+                                              name='ts_experiment_ai',
+                                              )
+            self.input_task.start()
 
             while True:
                 with QMutexLocker(self._mutex):
                     if self._stop_requested:
                         break
                 try:
-                    data = task.read(
-                        number_of_samples_per_channel=self.chunk_size,
-                        timeout=timeout,
-                    )
-                    self.worker.chunk_ready.emit(
-                        np.array(data, dtype=np.float64))
+                    data = self.input_task.read_daq(Nsamples=self.chunk_size, timeout=timeout)
+                    self.worker.chunk_ready.emit(np.array(data, dtype=np.float64))
                 except Exception as e:
                     err_str = str(e).lower()
                     if 'timeout' in err_str:
@@ -212,10 +192,10 @@ class TSPollingThread(QThread):
         except Exception as e:
             self.worker.error.emit(f'TS polling: {e}')
         finally:
-            if task:
-                try: task.stop()
+            if self.input_task:
+                try: self.input_task.stop()
                 except: pass
-                try: task.close()
+                try: self.input_task.__del__()
                 except: pass
             self.worker.finished.emit()
 
@@ -235,7 +215,7 @@ class TSPollingThread(QThread):
 class CounterPollingThread(QThread):
     """Continuous counter acquisition using blocking task.read() in a loop.
 
-    Mirrors TSPollingThread but uses a CI count-edges channel instead of
+    Mirrors AnalogPollingThread but uses a CI count-edges channel instead of
     an AI voltage channel.  Returns counts-per-bin (via np.diff) so the
     downstream data pipeline sees the same 1D numeric array shape as the
     analog path.
@@ -246,27 +226,27 @@ class CounterPollingThread(QThread):
     """
 
     def __init__(self, worker: TSWorker,
+                 channel: str,
                  counter: str,
-                 input_terminal: str,
                  sample_rate: float,
-                 chunk_size: int,
-                 buffer_size: int,
-                 sampling_source: str = '',
+                 chunk_size: int, buffer_size: int,
+                 sample_source: str = '',
                  start_trigger_source: str = '',
                  start_trigger_edge: str = 'rising',
+                 pause_trigger_source: str = '',
                  parent=None):
         super().__init__(parent)
         self.worker = worker
-        self.counter = counter              # e.g. 'P6363/ctr0'
-        self.input_terminal = input_terminal  # e.g. '/P6363/PFI2'
-        self.sample_rate = sample_rate
-        self.chunk_size = chunk_size
-        self.buffer_size = buffer_size
-        self.sampling_source = sampling_source
+        self.counter = counter      # e.g. 'P6363/ctr0'
+        self.channel = channel      # e.g. '/P6363/PFI2'
+        self.sample_rate = sample_rate;     self.sample_source = sample_source
+        self.chunk_size = chunk_size;       self.buffer_size = buffer_size
         self.start_trigger_source = start_trigger_source
         self.start_trigger_edge = start_trigger_edge
+        self.pause_trigger_source = pause_trigger_source
         self._stop_requested = False
         self._mutex = QMutex()
+        self.input_task: CounterInputTask
 
     def request_stop(self):
         with QMutexLocker(self._mutex):
@@ -279,55 +259,35 @@ class CounterPollingThread(QThread):
         chunk_duration = self.chunk_size / max(self.sample_rate, 1)
         timeout = max(chunk_duration * 5, 5.0)
 
-        self.worker.status.emit(
-            f'Counter Polling | {self.sample_rate/1e3:.1f} kSa/s '
-            f'| chunk={self.chunk_size} | buf={self.buffer_size}')
+        self.worker.status.emit(f'Counter Polling | {self.sample_rate/1e3:.1f} kSa/s '
+                                f'| chunk={self.chunk_size} | buf={self.buffer_size}')
 
-        task = None
         try:
-            task = nidaqmx.Task('ts_experiment_ci')
-
-            # Counter channel
-            ci_chan = task.ci_channels.add_ci_count_edges_chan(
-                counter=self.counter,
-                edge=Edge.RISING,
-            )
-            ci_chan.ci_count_edges_term = self.input_terminal
-
-            # CONTINUOUS sample clock timing
-            task.timing.cfg_samp_clk_timing(
-                rate=self.sample_rate,
-                source=self.sampling_source if self.sampling_source else '',
-                sample_mode=AcquisitionType.CONTINUOUS,
-                samps_per_chan=self.buffer_size,
-            )
-
-            # Arm-start trigger from PB (CI uses arm_start, not start_trigger)
-            if self.start_trigger_source:
-                edge_val = (Edge.RISING if self.start_trigger_edge == 'rising'
-                            else Edge.FALLING)
-                task.triggers.arm_start_trigger.dig_edge_src = (
-                    self.start_trigger_source)
-                task.triggers.arm_start_trigger.dig_edge_edge = edge_val
-
-            task.start()
+            self.input_task = CounterInputTask(dev = 'P6363',
+                                               channel = self.channel,
+                                               counter = self.counter,
+                                               sample_source = self.sample_source,
+                                               sample_rate = self.sample_rate,
+                                               sample_mode = 'continuous',
+                                               samps_per_chan = self.buffer_size,
+                                               start_trigger_source = self.start_trigger_source,
+                                               pause_trigger_source = self.pause_trigger_source,
+                                               name = 'ts_experiment_ci'
+                                               )
+            self.input_task.start()
 
             while True:
                 with QMutexLocker(self._mutex):
                     if self._stop_requested:
                         break
                 try:
-                    raw = task.read(
-                        number_of_samples_per_channel=self.chunk_size,
-                        timeout=timeout,
-                    )
+                    raw = self.input_task.read_daq(Nsamples=self.chunk_size, timeout=timeout)
                     # Convert accumulated counts → counts per bin
                     raw_i64 = np.array(raw, dtype=np.int64)
                     counts = np.diff(raw_i64, prepend=raw_i64[0])
                     # Handle 32-bit counter overflow (wrap-around)
                     counts[counts < 0] += 2**32
-                    self.worker.chunk_ready.emit(
-                        counts.astype(np.float64))
+                    self.worker.chunk_ready.emit(counts.astype(np.float64))
                 except Exception as e:
                     err_str = str(e).lower()
                     if 'timeout' in err_str:
@@ -341,10 +301,10 @@ class CounterPollingThread(QThread):
         except Exception as e:
             self.worker.error.emit(f'Counter polling: {e}')
         finally:
-            if task:
-                try: task.stop()
+            if self.input_task:
+                try: self.input_task.stop()
                 except: pass
-                try: task.close()
+                try: self.input_task.__del__()
                 except: pass
             self.worker.finished.emit()
 
@@ -411,7 +371,14 @@ class TimeseriesExperiment:
         self.sequence = config.seq.name
         self.pb_channels = config.pb.channels
         self.Nsamples_cfg = config.seq.Nsamples
-        self.n_channels = len(concfg.input_terminals)
+        # assert self.sequence and self.Nsamples_cfg
+
+        if self.cfg.runtime.detector == 'counter':
+            # assert config.daq_ci
+            self.n_channels = len(config.daq_ci.channel)
+        else:
+            # assert config.daq_ai
+            self.n_channels = len(config.daq_ai.channels)
 
         # Timeseries config (from RuntimeFlags)
         rt = config.runtime
@@ -420,8 +387,7 @@ class TimeseriesExperiment:
         self.contrast_op = getattr(rt, 'ts_contrast_op', 's/r')
 
         # Reads per cycle from sequence type
-        self.reads_per_cyc, self.daq_Nsamples = read_details(
-            self.sequence, self.n_channels, self.Nsamples_cfg)
+        self.reads_per_cyc, self.daq_Nsamples = read_details(self.sequence, self.n_channels, self.Nsamples_cfg)
 
         # Contrast processor
         rpc = self.reads_per_cyc[0] if self.reads_per_cyc else 2
@@ -447,11 +413,11 @@ class TimeseriesExperiment:
             self.fixed_value = 0.0
 
         # State
-        self._worker: Optional[TSWorker] = None
-        self._thread: Optional[TSPollingThread | CounterPollingThread] = None
-        self._auto_stop_timer: Optional[QTimer] = None
-        self.contrast_ring: Optional[RingBuffer] = None
-        self.raw_ring: Optional[RingBuffer] = None
+        self._worker: TSWorker|None = None
+        self._thread: AnalogPollingThread|CounterPollingThread|None = None
+        self._auto_stop_timer: QTimer|None = None
+        self.contrast_ring: RingBuffer|None = None
+        self.raw_ring: RingBuffer|None = None
         self.full_chunks: list = []
         self.elapsed: float = 0.0
         self._start_time: float = 0.0
@@ -465,6 +431,7 @@ class TimeseriesExperiment:
 
         # ── SG ───────────────────────────────────────────────────────
         if self.sequence not in ['aom_timing', 'T1ms0_train', 'drift_seq']:
+            # assert cfg.mw
             self.sg.set_freq(cfg.mw.freq)
             self.sg.set_amp_rf(cfg.mw.power)
 
@@ -475,6 +442,7 @@ class TimeseriesExperiment:
 
         # ── PB program at fixed point ────────────────────────────────
         args_names = cfg.seq.args_names
+        # assert args_names and cfg.seq.args_values and self.sequence
         seq_args = list(cfg.seq.args_values)
 
         if is_freq:
@@ -490,8 +458,7 @@ class TimeseriesExperiment:
         self.pb.run_sequence_for_diode(
             [the_list[i][0] for i in range(len(the_list))])
 
-        print(f"▶ TS: PB programmed — {self.sequence} @ "
-              f"{self.scan_name}={self.fixed_value:.4g}")
+        printt(f"▶ TS: PB programmed — {self.sequence} @ {self.scan_name}={self.fixed_value:.4g}")
 
         # ── AO ───────────────────────────────────────────────────────
         tf = cfg.extra.get('test_field', [0, 0, 0])
@@ -500,7 +467,8 @@ class TimeseriesExperiment:
 
         # ── Buffers ──────────────────────────────────────────────────
         # Contrast rate: one contrast point per PB cycle
-        sample_rate = cfg.daq_ai.ai_sample_rate
+        # assert cfg.daq_ai
+        sample_rate = cfg.daq_ai.sample_rate
         contrast_rate = sample_rate / self.chunk_samples
         contrast_cap = int(self.display_seconds * contrast_rate)
         raw_cap = int(self.display_seconds * sample_rate)
@@ -513,16 +481,14 @@ class TimeseriesExperiment:
         buf_size = getattr(cfg.runtime, 'ts_buffer_size', 0)
         if buf_size <= 0:
             buf_size = auto_buffer_size(self.chunk_samples, sample_rate)
-        self._buffer_size = buf_size
+        self.buffer_size = buf_size
 
-        print(f"▶ TS: chunk={self.chunk_samples} samples/cycle, "
-              f"buffer={buf_size}, contrast_rate={contrast_rate:.1f} pts/s, "
-              f"display={self.display_seconds}s")
+        printt(f"▶ TS: chunk={self.chunk_samples} samples/cycle, "
+              f"buffer={buf_size}, contrast_rate={contrast_rate:.1f} pts/s, display={self.display_seconds}s")
 
     # ── start / stop ────────────────────────────────────────────────
 
-    def start(self, callback: Optional[Callable] = None,
-              max_duration: Optional[float] = None):
+    def start(self, callback: Optional[Callable] = None, max_duration: Optional[float] = None):
         """Begin continuous acquisition.
 
         Parameters
@@ -533,50 +499,55 @@ class TimeseriesExperiment:
             Override config's ts_max_duration. 0 = manual stop only.
         """
         if self._running:
-            print("⚠ Already running")
+            printt("⚠ Already running")
             return
 
         cfg = self.cfg
-        sample_rate = cfg.daq_ai.ai_sample_rate
 
         # Worker + thread
         self._worker = TSWorker()
         self._callback = callback
 
         # Connect signals
-        self._worker.chunk_ready.connect(
-            self._on_chunk, type=2)   # Qt.QueuedConnection = 2
-        self._worker.error.connect(
-            lambda msg: print(f"❌ TS: {msg}"), type=2)
-        self._worker.finished.connect(self._on_finished, type=2)
-
-        channel = f"P6363/ai{concfg.input_terminals[0]}"
+        con_type = Qt.ConnectionType.QueuedConnection
+        self._worker.chunk_ready.connect(self._on_chunk_ready, type=con_type)
+        self._worker.error.connect(lambda msg: printt(f"❌ TS: {msg}"), type=con_type)
+        self._worker.finished.connect(self._on_finished, type=con_type)
 
         # Dispatch: analog (AI) vs counter (CI) polling thread
         if cfg.runtime.detector == 'counter':
             ci = cfg.daq_ci
-            self._thread = CounterPollingThread(
-                worker=self._worker,
-                counter=ci.ci_counter,
-                input_terminal=ci.ci_input_terminal,
-                sample_rate=sample_rate,
-                chunk_size=self.chunk_samples,
-                buffer_size=self._buffer_size,
-                sampling_source=concfg.samp_clk_terminal,
-                start_trigger_source=concfg.start_trig_terminal,
-            )
-            print(f"▶ TS: detector=COUNTER ({ci.ci_counter})")
+            # assert ci
+            # # assert ci.start_trigger_source and ci.pause_trigger_source
+            self._thread = CounterPollingThread(worker = self._worker,
+                                                counter = ci.counter,
+                                                channel = ci.channel,
+                                                sample_rate = ci.sample_rate,
+                                                sample_source = ci.sample_source,
+                                                chunk_size = self.chunk_samples,
+                                                buffer_size = self.buffer_size,
+                                                start_trigger_source = ci.start_trigger_source,
+                                                pause_trigger_source = ci.pause_trigger_source,
+                                                )
+            printt(f"▶ TS: detector=COUNTER ({ci.counter})")
         else:
-            self._thread = TSPollingThread(
-                worker=self._worker,
-                channel=channel,
-                sample_rate=sample_rate,
-                chunk_size=self.chunk_samples,
-                buffer_size=self._buffer_size,
-                sampling_source=concfg.samp_clk_terminal,
-                start_trigger_source=concfg.start_trig_terminal,
-            )
-            print(f"▶ TS: detector=ANALOG ({channel})")
+            ai = cfg.daq_ai
+            # assert ai
+            # print(f"Sample_source: p{ai.sample_source}p")
+            # print(f"Sample_source: {ai.start_trigger_source}")
+            # print(f"Sample_source: {ai.pause_trigger_source}")
+            # TODO: assertion error for variables with '' (exmaple sample_source)
+            # # assert ai.sample_source and ai.start_trigger_source and ai.pause_trigger_source
+            self._thread = AnalogPollingThread(worker = self._worker,
+                                           channels = ai.channels,
+                                           sample_rate = ai.sample_rate,
+                                           sample_source = ai.sample_source,
+                                           chunk_size = self.chunk_samples,
+                                           buffer_size = self.buffer_size,
+                                           start_trigger_source=ai.start_trigger_source,
+                                           pause_trigger_source=ai.pause_trigger_source,
+                                           )
+            printt(f"▶ TS: detector=ANALOG ({ai.channels})")
 
         self._start_time = time.perf_counter()
         self._running = True
@@ -589,9 +560,9 @@ class TimeseriesExperiment:
             self._auto_stop_timer.setSingleShot(True)
             self._auto_stop_timer.timeout.connect(self.stop)
             self._auto_stop_timer.start(int(dur * 1000))
-            print(f"▶ TS: auto-stop in {dur:.1f}s")
+            printt(f"▶ TS: auto-stop in {dur:.1f}s")
 
-        print("▶ TS: acquisition started")
+        printt("▶ TS: acquisition started")
 
     def stop(self):
         """Stop continuous acquisition."""
@@ -611,8 +582,7 @@ class TimeseriesExperiment:
 
         total = sum(len(c) for c in self.full_chunks)
         n_contrast = self.contrast_ring.total_count if self.contrast_ring else 0
-        print(f"⏹ TS: stopped — {self.elapsed:.1f}s, "
-              f"{total:,} raw samples, {n_contrast} contrast pts")
+        printt(f"⏹ TS: stopped — {self.elapsed:.1f}s, {total:,} raw samples, {n_contrast} contrast pts")
 
     def wait(self, timeout_ms: int = -1):
         """Block until acquisition finishes (for scripted use)."""
@@ -625,8 +595,9 @@ class TimeseriesExperiment:
 
     # ── data handlers ──────────────────────────────────────────────
 
-    def _on_chunk(self, raw: np.ndarray):
+    def _on_chunk_ready(self, raw: np.ndarray):
         """Called in main thread for each DAQ chunk."""
+        # # assert self.raw_ring and self.contrast_ring
         self.full_chunks.append(raw)
         self.raw_ring.append(raw)
 
@@ -647,32 +618,34 @@ class TimeseriesExperiment:
 
     # ── save ────────────────────────────────────────────────────────
 
-    def save(self, filepath, fmt: str = 'npz'):
+    def save(self, save_path, folder_number: str, fmt: str = 'npz'):
         """Save timeseries data.
 
         Parameters
         ----------
-        filepath : str or Path
+        save_path : str or Path
             Base path without extension. Extensions added automatically.
+        folder_number: str
+            
         fmt : str
             'npz' or 'h5' / 'hdf5'.
         """
         if not self.full_chunks:
-            print("⚠ No data to save")
+            printt("⚠ No data to save")
             return
-
-        base = Path(filepath)
+        df = save_path / f"ts_data_{folder_number}"
+        pf = save_path / f"params_{folder_number}.yaml"
         all_raw = np.concatenate(self.full_chunks)
 
         # Also compute all contrast from raw
         all_contrast, all_means = self.contrast_proc.process_multi(all_raw)
-
+        # assert self.cfg.daq_ai and self.cfg.mw
         meta = {
             'sequence': self.sequence,
             'scan_name': self.scan_name,
             'fixed_value': self.fixed_value,
             'detector': self.cfg.runtime.detector,
-            'sample_rate': self.cfg.daq_ai.ai_sample_rate,
+            'sample_rate': self.cfg.daq_ai.sample_rate,
             'Nsamples': self.Nsamples_cfg,
             'reads_per_cycle': self.contrast_proc.reads_per_cycle,
             'samples_per_read': self.contrast_proc.samples_per_read,
@@ -684,26 +657,27 @@ class TimeseriesExperiment:
 
         if fmt in ('h5', 'hdf5'):
             import h5py
-            p = base.with_suffix('.h5')
+            p = df.with_suffix('.h5')
             with h5py.File(p, 'w') as f:
                 f.create_dataset('raw', data=all_raw)
                 f.create_dataset('contrast', data=all_contrast)
                 f.create_dataset('means', data=all_means)
                 for k, v in meta.items():
                     f.attrs[k] = v
-            print(f"💾 TS saved → {p} ({len(all_raw):,} samples)")
+            printt(f"💾 TS saved → {p} ({len(all_raw):,} samples)")
         else:
-            p = base.with_suffix('.npz')
+            p = df.with_suffix('.npz')
             np.savez_compressed(p,
                                 raw=all_raw,
                                 contrast=all_contrast,
                                 means=all_means,
                                 **{f'meta_{k}': v for k, v in meta.items()})
-            print(f"💾 TS saved → {p} ({len(all_raw):,} samples)")
+            printt(f"💾 TS saved → {p} ({len(all_raw):,} samples)")
 
         # Also save config as YAML
-        cfg_path = base.with_suffix('.yaml')
-        savefile(cfg_path, self.cfg.to_dict())
+        cfg_dict = self.cfg.to_dict()
+        cfg_dict['experiment_type'] = 'timeseries'
+        savefile(pf, cfg_dict)
 
     # ── teardown ───────────────────────────────────────────────────
 

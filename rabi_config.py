@@ -1,39 +1,33 @@
 """
-rabi_config_new.py — Rabi experiment configuration.
+rabi_config.py — Rabi experiment configuration.
 """
 
 from experiment_config import (
-    ExperimentConfig, ScanAxis, ScanMode,
-    MicrowaveConfig, TimeConfig, PulseBlasterConfig,
-    SequenceConfig, DAQAIConfig, PlotConfig, SaveConfig, RuntimeFlags,
-    ns, us, ms, Hz, kHz, MHz, GHz,
+    ExperimentConfig, ScanAxis, ScanMode, PBpins, DAQ_INFO, MicrowaveConfig, TimeConfig,
+    PulseBlasterConfig, SequenceConfig, DAQAIConfig, PlotConfig, RuntimeFlags, DAQCIConfig,
 )
-
-try:
-    from connectionConfig import (PBclk, laser, samp_clk, start_trig,
-                                  MW, camera, bx, by, bz)
-except ImportError:
-    PBclk = 500
-    laser = samp_clk = start_trig = MW = camera = bx = by = bz = 0
-
+ns, us, ms = 1., 1e3, 1e6
+Hz, kHz, MHz, GHz = 1., 1e3, 1e6, 1e9
 
 # ── Timing ──────────────────────────────────────────────────────────────
-t_AOM    = 0.1 * ms
-ro_delay = 500 * ns
+t_AOM    = 2000 * us
+ro_delay = 1000 * ns
 AOM_lag  = 800 * ns
 MW_lag   = 80 * ns
-Nsamples = max(2, int((t_AOM) / ms * 1e-3 * 10e3))
-Nsamples = 100
+# Nsamples = max(2, int((t_AOM) / ms * 1e-3 * 10e3))
+# Nsamples = 2 * int(1*us / us*1e-6 * 2e6)
+Nsamples = 2
+Ncycles = 7500
 
 # ── Channel map ─────────────────────────────────────────────────────────
-channels = {
-    'samp':   samp_clk,
-    'mw':          MW,
-    'laser':       laser,
-    'start': start_trig,
-    # 'Camera':      camera,
-    # 'Bx': bx, 'By': by, 'Bz': bz,
-}
+channels = [
+    PBpins.samp_clk,
+    PBpins.MW,
+    PBpins.laser,
+    PBpins.start_trig,
+    PBpins.pause_trig,
+    PBpins.gate,
+]
 
 # ── Build config ────────────────────────────────────────────────────────
 config = ExperimentConfig(
@@ -42,20 +36,18 @@ config = ExperimentConfig(
             name='tau',
             start=10 * ns,
             stop=500 * ns,
-            step=50 * ns,
+            step=2 * ns,
         ),
-        # 'mw_power': ScanAxis(
-        #     name='mw_power',
-        #     start=-24,
-        #     stop=-20,
-        #     step=4,
+        'mw_power': ScanAxis(
+            name='mw_power',
+            explicit_values=[8, -20],
+        ),
+        # 'AOM_lag': ScanAxis(
+        #     name='AOM_lag',
+        #     start=800,
+        #     stop=1000,
+        #     step=200,
         # ),
-        'AOM_lag': ScanAxis(
-            name='AOM_lag',
-            start=800,
-            stop=1000,
-            step=200,
-        ),
         # 't_AOM': ScanAxis(
         #     name='t_AOM',
         #     start=0.1 *ms,
@@ -64,22 +56,41 @@ config = ExperimentConfig(
         # ),
     },
 
-    mw=MicrowaveConfig(power=8, freq=3.026*GHz),
-    times=TimeConfig(t_AOM=t_AOM,),
-    pb=PulseBlasterConfig(
-        clock_MHz=PBclk,
-        channels=dict(sorted(channels.items(), key=lambda kv: kv[1])),
-    ),
+    mw=MicrowaveConfig(power=8, freq=2.8965*GHz),
+    times=TimeConfig(t_AOM=t_AOM, ro_delay=ro_delay),
     seq=SequenceConfig(
         name='rabi_seq',
         args_names=['t_AOM', 'ro_delay', 'AOM_lag', 'MW_lag'],
         args_values=[t_AOM, ro_delay, AOM_lag, MW_lag],
         Nsamples=Nsamples,
+        Ncycles=Ncycles
     ),
-    daq_ai=DAQAIConfig(ai_samps_per_chan=Nsamples),
-    plot=PlotConfig(x_units=ns, x_label='Microwave pulse length (ns)'),
-    save_opts=SaveConfig(prefix='Rabi'),
-    runtime=RuntimeFlags(Nruns=2, reload_pb=True, seq_plot_indices=[0, 5, -1])
-).use('mw', 'daq_ai')
+    # daq_ai = DAQAIConfig(
+    #     voltage_ranges=[(-0.1,0.1)],
+    #     sample_source='',
+    #     # sample_source=DAQ_INFO['samp_clk_terminal'],
+    #     sample_rate=2e6,
+    #     samps_per_chan=Nsamples,
+    #     start_trigger_source=DAQ_INFO['start_trig_terminal'],
+    #     pause_trigger_source=DAQ_INFO['pause_trig_terminal'],
+    #     # pause_trigger_source='',
+    # ),
+    daq_ci = DAQCIConfig(
+        sample_source=DAQ_INFO['samp_clk_terminal'],
+        samps_per_chan=Nsamples,
+        start_trigger_source=DAQ_INFO['start_trig_terminal'],
+        pause_trigger_source=DAQ_INFO['pause_trig_terminal'],
+    ),
+    runtime=RuntimeFlags(Nruns=2, reload_pb=True, seq_plot_indices=[-1]),
 
-params_dict = config.to_dict()
+    plot=PlotConfig(x_label='MW Duration', x_label_units='s', x_units=ns),
+    pb=PulseBlasterConfig(clock_MHz=ExperimentConfig.PB_CLK,
+                          channels=sorted(channels),),
+)
+
+# _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'daq_ci', 'uhfli', 'camera', 'field_cfg'}
+# config.use('mw', 'daq_ai')
+
+# configure detector based on input
+if config.daq_ai is None and config.daq_ci:
+    config.runtime.detector = 'counter'

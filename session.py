@@ -17,56 +17,61 @@
 #   - Save: Saved_Data/YYYY-MM-DD/meas_NNN/ with data + metadata
 #   - Default autosave ON, per-run overwrite (crash-safe)
 # =============================================================================
-# TODO: Instruments: SG not turning ON at measurement start...
-# TODO: Plot: only signal is plotted. Where is the reference?
-# TODO: Plot: the contrast is calculated to 1. Why?
-# TODO: Plot: plot the current lines as bold and then decrease the linewidth on completion
-# TODO: Plot: switch off the grids of at least one axis
-# TODO: Plot: Legends only available for the 1st signal plot. Why?
-# TODO: Plot: Introduce separate legends (separate locations) for left and right axis. Possible?
-# TODO: Plot: Change the left axis of the sweep plot to have mV, uV, kV, MV as in DAQ Scope instead of exponents.
-# TODO: Session: The tree view line highlight color is bad - blue and black.
-# TODO: Session: The parameters does not update on changing the `control_daq_sequences.py` file. The plot does not change. Needs Session Manager restart. Why?
-# TODO: Session: Save after run without autosave ON - run a save command via the console??? Save the corresponding experiment variable.
-# TODO: Expt: What is needed for counter measurements. Try on 09-Jun-26 (?) and check.
-# TODO: Config: ai/ao_channels, ai/ao_voltage_ranges not saved
+# TODO: Instruments: SG not turning ON at measurement start... xxxxxxxx DONE xxxxxxxxxx
+# TODO: Plot: 2 plot panels should have variable height... xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Implemented QSplitter xxxxxxxxxxxxxxxx
+# TODO: Plot: only signal is plotted. Where is the reference? xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Reference curve was not plotted. Implemented now... xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Plot: the contrast is calculated to 1. Why? xxxxxxxx Calculation checked xxxxxxxxxx
+# TODO: Plot: plot the current lines as bold and then decrease the linewidth on completion.. xxxxxxxxxxxxxxx Introduced in `_on_plot()`... xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Plot: switch off the grids of at least one axis.. xxxxxxxxxxxxxxxxxxxxxxxxxxxx Done: showGrid(x=True, y=False, ), then setGrid(0.3)... xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Plot: Legends only available for the 1st signal plot. Why? xxxxxxxxxxxxxxxx Removed `if i_run == 0 else None` from `name` entry of `PlotItem()`... xxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Plot: Introduce separate legends (separate locations) for left and right axis. Possible? xxxxxxxxxxxxxxxxxxxxxxxxx Introduced via `pg.LegendItem()`... xxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Plot: Change the left axis of the sweep plot to have mV, uV, kV, MV as in DAQ Scope instead of exponents. xxxxxxxxxxxxxxxxxxxxx Assigned `units='1'` in `setLabel()`... xxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Session: The tree view line highlight color is bad - blue and black. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Chanegd stylesheet xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Session: The parameters does not update on changing the `control_daq_sequences.py` file. The plot does not change. Needs Session Manager restart. Why? xxxxxxxxxxxxxx Solved: control_daq_sequences and control_camera_sequences imported separately.. xxxxxxxxxxxxxxxxxx
+# TODO: Expt: What is needed for counter measurements. Try on 09-Jun-26 (?) and check. xxxxxxxxx DONE xxxxxxxxx
+# TODO: Config: ai/ao_channels, ai/ao_voltage_ranges not saved.. xxxxxxxxxxxxxxxxxx experiment_config updated.. xxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Plot: Timeseries plot axis displays Contrast on both sides. Rectify. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Removed the axis: `plotItem.showAxis('right', False)`... xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Save: seems several problems in _make_folder()! Check.. Search with 'dd = Path' to locate problems.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx See next xxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Save: typical data file name: data_data_012.npy. Remove the redundant 'data'...xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Resolved with the data folder carrying the prefix and suffix. The npy, npz, tiff, yaml only have `data_[number]` format xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Session: PBgui: either eject PB and reacquire after GUI close, or, start in same process, as a different thread... xxxxxxxxxxxxxxxxxxxx Solved with QProcess... xxxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: Pause trigger not included. xxxxxxxxxxxxxxx sequenceconfig and experiment_config changed and updated.. xxxxxxxxxxxxxxxxxxxxxxxx
+# TODO: view_sequence() should not require PB - this is just plot xxxxxxxxxxxxx DONE xxxxxxxxxxxxxxxxxxxxxxx
+
 # TODO: Expt: Timeseries not updating the plot realtime (both panels). Also, no data is acquired.
-# TODO: Plot: Timeseries plot axis displays Contrast on both sides. Rectify.
+# TODO: Verify counter timeseries experiments
+# TODO: Abort not releasing DAQ resources...
+# TODO: Clear/Reset plots - pushbutton
 # TODO: Session: console sometimes shows 'QCoreApplication::exec: The event loop is already running'
 # TODO: Save: save folder does not work properly. Several problems: non-existent folder not created w/o user intervention - should be auto-created if does not exist. Examples: <<TS saved → meas_data_001\ts_data_001.npz (98,000 samples)>> without folder creation, <<TS saved → D:\Brateen\Saved_Data\2026-06-09\meas_data_002\ts_data_002.npz (98,000 samples)>> with folder created by user.
-# TODO: Save: seems several problems in _make_folder_number()! Check.. Search with 'dd = Path' to locate problems.
-# TODO: Save: typical data file name: data_data_012.npy. Remove the redundant 'data'...
-# TODO: Session: PBgui: either eject PB and reacquire after GUI close, or, start in same process, as a different thread...
-# TODO: Pause trigger not included.
+# TODO: Switching from analog to counter does not update the plot area
 
-import sys, time, json, glob, importlib, traceback, subprocess, os, ctypes, numpy as np, pyqtgraph as pg, shutil
-from typing import Optional, List, Dict, Tuple
+import sys, time, json, traceback, subprocess, os, ctypes, numpy as np, pyqtgraph as pg, shutil
+import types, importlib
+from experiment_config import PB_CLK
+from typing import Optional, List, Dict, Tuple, Union
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from ctypes import wintypes
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QPushButton, QComboBox, QCheckBox, QStatusBar, QFileDialog, QFrame,
     QLineEdit, QMessageBox, QTabWidget, QTreeWidget, QSizePolicy,
     QTreeWidgetItem, QHeaderView, QSpinBox, QGroupBox, QButtonGroup, QGridLayout
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QPropertyAnimation, Property, QEasingCurve, QUrl, QDir
+from PySide6.QtCore import (Qt, QThread, Signal, Slot, QTimer, QPropertyAnimation, Property,
+                            QEasingCurve, QUrl, QSignalBlocker, QProcess)
 from PySide6.QtGui import QColor, QPainter, QBrush, QPalette, QIcon, QDesktopServices
 
+from timeseries_experiment import TimeseriesExperiment
+# from camera_experiment import CameraTimeseriesExperiment
 from SGcontrol import SignalGenerator, SignalGenerator_sim
 from PBcontrol import PulseBlaster
 from DAQcontrol import AnalogOutputTask
-import connectionConfig as concfg
 
-# ── IPython in-process console (optional — degrades gracefully) ──────
-try:
-    from qtconsole.rich_ipython_widget import RichIPythonWidget
-    from qtconsole.inprocess import QtInProcessKernelManager
-    _HAS_QTCONSOLE = True
-except ImportError:
-    _HAS_QTCONSOLE = False
-
+from qtconsole.rich_ipython_widget import RichIPythonWidget
+from qtconsole.inprocess import QtInProcessKernelManager
+os.environ["PYTHONUTF8"] = "1"
 # ── palette ──────────────────────────────────────────────────────────────
 _PAL = ['#4ec9b0', '#569cd6', '#dcdcaa', '#ce9178', '#c586c0',
         '#9cdcfe', '#d7ba7d', '#b5cea8', '#f44747', '#6a9955']
@@ -76,11 +81,14 @@ DEFAULT_STATE_FILE = 'last_state.json'
 DEFAULT_SAVE_DIRECTORY = r'D:\Brateen\Saved_Data'
 DEFAULT_EXPERIMENT_DIRECTORY = r'D:\Brateen\NV_Experiment'
 
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
 def _pen(idx, alpha=255, width=1.5, dash=False):
-    c = pg.mkColor(_PAL[idx % len(_PAL)])
-    c.setAlpha(alpha)
+    color = pg.mkColor(_PAL[idx % len(_PAL)]).getRgb()
+    color = (*color[:3], alpha)     # type: ignore
     style = Qt.PenStyle.DashLine if dash else Qt.PenStyle.SolidLine
-    return pg.mkPen(c, width=width, style=style)
+    return pg.mkPen(color, width=width, style=style)
 
 user32 = ctypes.windll.user32   # Load user32.dll
 # Callback function type for EnumWindows
@@ -129,6 +137,23 @@ class ClickableLegend(pg.LegendItem):
                 ev.accept()
                 return
         super().mousePressEvent(ev)
+
+class MPlotWidget(pg.PlotWidget):
+    def __init__(self, parent=None, has_legend=True, **kwargs):
+        super().__init__(parent, **kwargs)
+
+        # Automatically attach the custom clickable legend if requested
+        # if has_legend:
+        #     self.custom_legend = ClickableLegend(offset=(50, 10))
+        #     self.custom_legend.setParentItem(self.plotItem.vb)
+        #     self.plotItem.legend = self.custom_legend
+        
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.plotItem.vb.autoRange()    # type: ignore # enableAutoRange('xy', True)
+            if hasattr(self, 'contrast_vb'):    # Autoscale the secondary (right) axis
+                self.contrast_vb.autoRange()
+        super().mouseDoubleClickEvent(event)
 
 # ── metadata tree helper ────────────────────────────────────────────────
 def _populate_tree(parent, data):
@@ -260,6 +285,14 @@ class QVLine(QFrame):
         self.setFrameShape(QFrame.Shape.VLine)
         self.setFrameShadow(QFrame.Shadow.Sunken)
 
+class TimeLabel(QLabel):
+    """Add a time string to Qlabel string for status bar"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    # Override setText() to include time string
+    def setText(self, msg):
+        super().setText(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
 # ── ExperimentThread ────────────────────────────────────────────────────────
 class ExperimentThread(QThread):
     # inner_idx, param_val, i_run, oc_idx, oc_vals_str, processed, raw
@@ -267,10 +300,10 @@ class ExperimentThread(QThread):
     finished_signal = Signal(object, object)   # (exp, data)
     error_signal = Signal(str)
 
-    def __init__(self, run_func, instruments, config,
-                 save_path=None, folder_number=None):
+    def __init__(self, run_func: types.FunctionType, instruments: dict, config: types.ModuleType,
+                 save_path: Path|None = None, folder_number: str|int|None = None):
         super().__init__()
-        self.run_func = run_func
+        self.run_func = run_func        # mainControl_diode.run() | mainControl_camera.run()
         self.instruments = instruments
         self.config = config
         self.save_path = save_path
@@ -279,10 +312,10 @@ class ExperimentThread(QThread):
 
     def run(self):
         try:
-            exp, data = self.run_func(
+            exp, data = self.run_func(      # mainControl_diode.run() | mainControl_camera.run()
                 instruments=self.instruments,
                 config=self.config,
-                callback=self._cb,
+                callback=self._callback,
                 stop_check=lambda: self._stop,
                 save_path=self.save_path,
                 folder_number=self.folder_number,
@@ -291,11 +324,11 @@ class ExperimentThread(QThread):
         except Exception:
             self.error_signal.emit(traceback.format_exc())
 
-    def _cb(self, inner_idx, val, i_run, oc_idx, oc_vals, proc, raw):
-        oc_str = "  ".join(f"{k}={v:.4g}" for k, v in oc_vals.items()) \
-                 if oc_vals else ""
-        self.point_signal.emit(inner_idx, val, i_run, oc_idx, oc_str,
-                               proc, raw)
+    def _callback(self, inner_idx, val, i_run, oc_idx, oc_vals, proc, raw):
+        """Callback to connect to the plot via `self._upd.connect(self._on_plot, ...)`"""
+
+        oc_str = "  ".join(f"{k}={v:.4g}" for k, v in oc_vals.items()) if oc_vals else ""
+        self.point_signal.emit(inner_idx, val, i_run, oc_idx, oc_str, proc, raw)
 
     def request_stop(self):
         self._stop = True
@@ -304,15 +337,13 @@ class ExperimentThread(QThread):
 # ── Session Manager ─────────────────────────────────────────────────────────
 pg.setConfigOptions(antialias=True)
 
-# QPushButton { background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 6px 12px; color: #e0e0e0; }
-# QPushButton:hover { background-color: #4d4d4d; }
-
 _SS = """
 QMainWindow,QWidget{font-family:'Segoe UI',Arial,sans-serif;}
 QMainWindow{background-color:#454545;color:#d4d4d4;}
-QGroupBox{border:1px solid #4a4a4a;border-radius:4px;margin-top:8px;
-    padding-top:14px;font-weight:bold; font-size:12px}
-QGroupBox::title{subcontrol-origin:margin;left:10px}
+QGroupBox{border:1px solid #4a4a4a; border-radius:2px; margin-top:6px;
+    padding-top:11px; font-weight:bold; font-size:12px}
+QGroupBox::title{subcontrol-origin:margin; left:10px;
+    subcontrol-position:top left;padding:0 4px}
 QTabWidget::pane{border:1px solid #555; background:#353535}
 QTabBar::tab{background:#414141; border:1px solid #555;
     padding:4px 10px; margin-right:2px; border-top-left-radius:3px;
@@ -421,9 +452,9 @@ QSpinBox::down-arrow {
     width: 0px; height: 0px; border-left: 4px solid #3d3d3d;
     border-right: 4px solid #3d3d3d; border-top: 5px solid #ffffff;
 }
-
 QTreeWidget{background:#252526;border:none;color:#d4d4d4}
-QTreeWidget::item:alternate{background:#2a2a2a}
+QTreeView::item:has-children{color: #00ff00; font-weight: bold;}
+/**QTreeView::item:!has-children{color: #009ee0;} **/
 QCheckBox {
     color: #ffffff;
     spacing: 8px;
@@ -456,7 +487,8 @@ class SessionManager(QMainWindow):
         self.statefile_directory = Path(DEFAULT_STATE_DIRECTORY)
         self.statefile_directory.mkdir(parents=True, exist_ok=True)
 
-        self.sg = None; self.pb = None; self.ao_task = None
+        self.sg: SignalGenerator|None = None; self.pb: PulseBlaster|None = None
+        self.ao_task: AnalogOutputTask|None = None
         self.instruments_connected = False
         self._pb_ready = False
 
@@ -465,7 +497,7 @@ class SessionManager(QMainWindow):
         self.last_exp = None  # DiodeExperiment object from last run
 
         # Per-(outer, run) curve storage
-        self._curves: dict[str, pg.PlotDataItem] = {}
+        self.curves: dict[str, tuple[pg.PlotDataItem, int]] = {}
 
         self._loaded_config = None
         self._loaded_config_name = ""
@@ -474,19 +506,21 @@ class SessionManager(QMainWindow):
         self._camera_viewer = None       # In-process CameraViewerV2 window
         self._hci_process = None          # subprocess.Popen for HCImageLive
         self._hci_watcher = None          # QTimer polling HCImageLive exit
-        self._last_save_path = None       # Path to last meas_NNN/ directory
-        self._last_folder_number = None   # Last folder_number string
+        self._last_save_path: Path = Path('')      # Path to last meas_NNN/ directory
+        self._last_folder_number: Union[str, int] = 1   # Last folder_number string
         self._deferred_comment = ''       # Comment deferred to next measurement
-        self._contrast_vb = None          # Right-axis ViewBox for diode sweep
+        self.contrast_vb: pg.ViewBox|None# = None          # Right-axis ViewBox for diode sweep
         self._cam_contrast_vb = None      # Right-axis ViewBox for camera sweep
         self._cam_extra_plots = []        # Camera-specific dynamic plot widgets
         self.last_used_configs = ['esr_config', 'esr_camera_config']      # pos 0 - diode, pos 1 - camera
-        self.tools = {'daq':[0], 'pb':[0], 'sg':[0], 'verdi':[0]}
+        self.tools: dict[str, list[int|QProcess]] = {'daq':[0], 'pb':[0], 'sg':[0], 'verdi':[0]}
+        self.folder_labels = ['', 0, '']        # prefix, number, suffix
 
         self._build_ui()
         self._load_session_state()
 
         self._upd.connect(self._on_plot, Qt.ConnectionType.QueuedConnection)
+        printt("\x1b[38;2;0;210;100mGUI Launched...\x1b[0m")
 
     # ── UI ──────────────────────────────────────────────────────────────
 
@@ -510,30 +544,36 @@ class SessionManager(QMainWindow):
         root.addWidget(self._tabs)
 
         # Right: plots
-        plot_wg = QWidget()
-        
-        plot_wg_sub = QVBoxLayout(plot_wg);  plot_wg_sub.setContentsMargins(0, 0, 0, 0)
-        self.sweep_plot = pg.PlotWidget(title="Sweep")
-        self.sweep_plot.addLegend(offset=(10, 10))
-        self.sweep_plot.setLabel('bottom', 'Parameter')
-        self.sweep_plot.setLabel('left', 'Signal')
-        self.sweep_plot.showGrid(x=True, y=True, alpha=0.3)
-        plot_wg_sub.addWidget(self.sweep_plot, stretch=2)
+        plot_wg = QWidget()     # 1. Create the container widget
 
-        self.raw_plot = pg.PlotWidget(title="Raw Trace")
-        self.raw_plot.setLabel('bottom', 'Sample')
+        plot_wg_sub = QVBoxLayout(plot_wg);  plot_wg_sub.setContentsMargins(0, 0, 0, 0)
+        self.plot_splitter = QSplitter(Qt.Orientation.Vertical)     # Create the Vertical Splitter
+        self.sweep_plot = MPlotWidget(title="Sweep")
+        self.sweep_plot.addLegend(offset=(10, 10))
+        self.sweep_plot.setLabel('bottom', 'Parameter', units='1')
+        self.sweep_plot.setLabel('left', 'Signal', units='1')
+        self.sweep_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_splitter.addWidget(self.sweep_plot)
+
+        self.raw_plot = MPlotWidget(title="Raw Trace")
+        self.raw_plot.setLabel('bottom', 'Sample', units='1')
         self.raw_plot.showGrid(x=True, y=True, alpha=0.3)
         self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1))
-        plot_wg_sub.addWidget(self.raw_plot, stretch=1)
+        self.plot_splitter.addWidget(self.raw_plot)
+
+        self.plot_splitter.setSizes([400, 200])         # Set initial sizes (pixels), 2:1 ratio initially
+        plot_wg_sub.addWidget(self.plot_splitter)       # Add splitter to the main layout
         root.addWidget(plot_wg, stretch=1)
 
         self.status_bar = QStatusBar(); self.setStatusBar(self.status_bar)
-        self.status_label = QLabel("Ready"); self.status_bar.addWidget(self.status_label, 1)
+        self.status_label = TimeLabel("Ready"); self.status_bar.addWidget(self.status_label, 1)
+        self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.status_label.setStyleSheet("padding-right: 20px; padding-bottom: 3px; font-weight: bold")
 
         # Save Folder status display
         # TODO: how to update this after any change in the self.save_folder_path attribute?
         self.save_folder_status_bar = QLabel() #f"Data Save Folder: {self.save_folder_path}")
+        self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.save_folder_status_bar.setOpenExternalLinks(True) # <-- CRUCIAL: Enables clicking links
         # Call your update method immediately to set the initial link text
         self.update_folder_statusbar(self.save_folder_path,
@@ -587,23 +627,6 @@ class SessionManager(QMainWindow):
             vl.addWidget(l)
             vl.addSpacing(5) if index !=3 else None
 
-        # ── Reload modules button (Feature 2) ───────────────────────
-        cr = QHBoxLayout()
-        cr.addWidget(QLabel("Modules:"))
-        # cr.addStretch()
-        self.btn_reload_modules = QPushButton("🔄 Reload Modules")
-        self.btn_reload_modules.setFixedSize(200, 25)
-        self.btn_reload_modules.setToolTip(
-            "Re-import PBcontrol, DAQcontrol, SGcontrol,\n"
-            "sequencecontrol, connectionConfig, experiment_base,\n"
-            "camera_experiment, timeseries_experiment, sweep_utils.\n"
-            "Use after editing driver code without restarting.")
-        self.btn_reload_modules.setStyleSheet(
-            "QPushButton{background:#3d3d1d}QPushButton:hover{background:#4d4d2d}")
-        self.btn_reload_modules.clicked.connect(self._reload_modules)
-        cr.addWidget(self.btn_reload_modules)
-        cr.addStretch()
-        vl.addLayout(cr)
         vl.addWidget(QHLine())
 
         vl.addSpacing(10)
@@ -616,11 +639,11 @@ class SessionManager(QMainWindow):
         self.simulate_checkboxes = {}
 
         for nm in instrs:
-            r2.addSpacing(4)
-            if nm != 'SG':
-                b = QLabel("")
-            else:
+            r2.addSpacing(7)
+            if nm in ['SG', 'CAM']:
                 b = QCheckBox(f"Simulate {nm}")
+            else:
+                b = QLabel("")
             
             r2.addWidget(b)
             r2.addSpacing(4)
@@ -633,7 +656,7 @@ class SessionManager(QMainWindow):
         for nm in instrs:
             if nm not in ['AO', ]:
                 b = QPushButton(f"Init {nm}"); b.setMaximumWidth(90)
-                b.clicked.connect(lambda _, n=nm: self._init(n))
+                b.clicked.connect(lambda _, n=nm: self._init_instr(n))
                 b.setStyleSheet("QPushButton{background:#2d4a2d}QPushButton:hover{background:#3a5f3a}")
             else:
                 r2.addSpacing(6)
@@ -729,9 +752,9 @@ class SessionManager(QMainWindow):
         self.btn_launch_verdi_gui.setToolTip("Launch verdi_gui.py in a new process")
         self.btn_launch_verdi_gui.clicked.connect(lambda: self._launch_tool('verdi_v5_gui.py'))
         tr_sub.addWidget(self.btn_launch_verdi_gui)
-        tr.addLayout(tr_sub)
-        tr.addStretch()
+        tr.addLayout(tr_sub);   tr.addStretch()
         vl.addLayout(tr)
+        # TODO: add DAQ pins and PB pins info...
         
         # ── Session state save/load ─────────────────────────────────
         vl.addStretch()
@@ -739,9 +762,16 @@ class SessionManager(QMainWindow):
 
         return w
     
+    def _update_last_used_configs(self):
+        script_file = self.script_combo.currentText()
+        if 'diode' in script_file:
+            self.last_used_configs[0] = self.config_combo.currentText()
+        elif 'camera' in script_file:
+            self.last_used_configs[1] = self.config_combo.currentText()
+
     def _refresh_config_file_list(self, script_file:str=''):
         if script_file == '':
-            script_file = self.cb_scr.currentText()
+            script_file = self.script_combo.currentText()
         
         self.config_files = [file.stem
                              for file in list(Path.glob(Path(DEFAULT_EXPERIMENT_DIRECTORY),
@@ -757,23 +787,25 @@ class SessionManager(QMainWindow):
             self.config_files = list(filter(lambda x: x != '', self.config_files))
     
     def _update_config_file_display(self):
-        self.cb_cfg.clear()  # Clear old items
-        self.cb_cfg.addItems(self.config_files)
+        with QSignalBlocker(self.config_combo):
+            self.config_combo.clear()  # Clear old items
+            self.config_combo.addItems(self.config_files)
 
-        script_file = self.cb_scr.currentText()
+        script_file = self.script_combo.currentText()
         if 'diode' in script_file:
-            self.cb_cfg.setCurrentText(self.last_used_configs[0])
+            self.config_combo.setCurrentText(self.last_used_configs[0])
         elif 'camera' in script_file:
-            self.cb_cfg.setCurrentText(self.last_used_configs[1])
-        # print(f"_update_config_file_display(): {self.cb_cfg.currentText()}")
+            self.config_combo.setCurrentText(self.last_used_configs[1])
 
     def _update_config_file_list(self):
-        script_file = self.cb_scr.currentText()
+        script_file = self.script_combo.currentText()
+        # printt(f"In _update_config_file_list: {self.last_used_configs}")
 
         if 'diode' in script_file:
-            self.last_used_configs[1] = self.cb_cfg.currentText()
+            self.last_used_configs[1] = self.config_combo.currentText()
         elif 'camera' in script_file:
-            self.last_used_configs[0] = self.cb_cfg.currentText()
+            self.last_used_configs[0] = self.config_combo.currentText()
+        
         self._refresh_config_file_list(script_file=script_file)
         self._update_config_file_display()
     
@@ -782,8 +814,8 @@ class SessionManager(QMainWindow):
                              list(Path.glob(Path(DEFAULT_EXPERIMENT_DIRECTORY), 'mainControl_*.py'))]
     
     def _update_script_list_display(self):
-        self.cb_scr.clear()  # Clear old items
-        self.cb_scr.addItems(self.script_files)
+        self.script_combo.clear()  # Clear old items
+        self.script_combo.addItems(self.script_files)
     
     def _make_new_folder(self, folder_path):
         folder_path = Path(folder_path)
@@ -796,10 +828,10 @@ class SessionManager(QMainWindow):
         folder_path = Path(folder_path)
         
         if folder_path.exists():
-            self.save_folder.setStyleSheet("""color:#fff; """)   # color:#2fff00
+            self.save_folder_input.setStyleSheet("""color:#fff; """)   # color:#2fff00
             self.save_folder_path = str(folder_path)
         else:
-            self.save_folder.setStyleSheet("""color:#ff0000; """)
+            self.save_folder_input.setStyleSheet("""color:#ff0000; """)
             self.save_folder_path = ''
         self.save_folder_changed.emit(self.save_folder_path)
     
@@ -809,40 +841,52 @@ class SessionManager(QMainWindow):
         dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
         dialog.setDirectory(DEFAULT_SAVE_DIRECTORY)
         dialog.setViewMode(QFileDialog.ViewMode.Detail)
-        presets = [ # Define preset URLs
+        presets = [         # Define preset URLs
             QUrl.fromLocalFile(DEFAULT_SAVE_DIRECTORY),
             QUrl.fromLocalFile(DEFAULT_EXPERIMENT_DIRECTORY),
         ]
         dialog.setSidebarUrls(presets)      # Add to the sidebar
         if dialog.exec():
             folder = dialog.selectedFiles()[0]
-            self.save_folder.setText(folder)
+            self.save_folder_input.setText(folder)
         
         # Either above (without native dialog) or the below commented part (with Windows native dialog)...
         # folder = QFileDialog.getExistingDirectory(self, "Select Folder", DEFAULT_SAVE_DIRECTORY)
         # if folder:
-        #     self.save_folder.setText(folder)
+            # self.save_folder_input.setText(folder)
     
     def _build_experiment_tab(self):
-        w = QWidget()
-        
-        vl = QVBoxLayout(w); vl.setContentsMargins(6,6,6,6)
-
+        w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(6,6,6,6)
+        vl.setAlignment(Qt.AlignmentFlag.AlignTop)
         vl.addSpacing(4)
+
+        # ── Reload modules button (Feature 2) ───────────────────────
+        cr = QHBoxLayout()
+        cr.addWidget(QLabel("Modules:"))
+        # cr.addStretch()
+        self.btn_reload_modules = QPushButton(" Reload Modules")
+        self.btn_reload_modules.setFixedSize(150, 30)
+        self.btn_reload_modules.setToolTip(
+            "Re-import PBcontrol, DAQcontrol, SGcontrol,\n"
+            "sequencecontrol, experiment_config, experiment_base,\n"
+            "camera_experiment, timeseries_experiment, sweep_utils.\n"
+            "Use after editing driver code without restarting.")
+        self.btn_reload_modules.setStyleSheet(
+            "QPushButton{background:#3d3d1d}QPushButton:hover{background:#4d4d2d}")
+        self.btn_reload_modules.clicked.connect(self._reload_modules)
+        cr.addWidget(self.btn_reload_modules)
+        cr.addStretch()
+        vl.addLayout(cr)
+
         config_grp = QGroupBox("Experiment Config")
-        config_grp.setStyleSheet(
-            "QGroupBox {"
-            "border-radius: 3px;"
-            "margin-top: 6px; padding-top: 14px }"
-            "QGroupBox::title {"
-            "subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px}")
         
         r1 = QVBoxLayout(config_grp)
         
         r1_sub = QHBoxLayout()
         r1_sub.addWidget(QLabel("Config Module:"))
-        self.cb_cfg = QComboBox()
-        r1_sub.addWidget(self.cb_cfg)
+        self.config_combo = QComboBox()
+        self.config_combo.currentTextChanged.connect(lambda: self._update_last_used_configs())
+        r1_sub.addWidget(self.config_combo)
 
         self.open_config = QPushButton("🖋")
         self.open_config.setStyleSheet("""
@@ -851,7 +895,7 @@ class SessionManager(QMainWindow):
         """)
         self.open_config.setFixedSize(25, 28)
         self.open_config.setToolTip("Edit Config File")
-        self.open_config.clicked.connect(lambda: self._open_in_editor(self.cb_cfg.currentText()))
+        self.open_config.clicked.connect(lambda: self._open_in_editor(self.config_combo.currentText()))
         r1_sub.addWidget(self.open_config)
 
         # Refresh button inline with combo
@@ -868,30 +912,23 @@ class SessionManager(QMainWindow):
         r1.addSpacing(5)
 
         r1_sub = QHBoxLayout()
-        self.btn_load_cfg = QPushButton("📋 Load")
+        self.btn_load_cfg = QPushButton("Load")
         self.btn_load_cfg.clicked.connect(self._load_config)
         r1_sub.addWidget(self.btn_load_cfg)
 
-        self.btn_view_seq = QPushButton("🔍 View")
+        self.btn_view_seq = QPushButton("Plot")
         self.btn_view_seq.setToolTip("View Sequence (needs PB)")
-        # self.btn_view_seq.setStyleSheet(
-        #     "QPushButton{background:#2d5f2d}QPushButton:hover{background:#3a7a3a}")
-        self.btn_view_seq.clicked.connect(self._view_sequence)
-        # self.btn_view_seq.setEnabled(False)
+        self.btn_view_seq.clicked.connect(self._plot_sequence)
         r1_sub.addWidget(self.btn_view_seq)
 
         self.btn_play_seq = QPushButton("▶ Play")
         self.btn_play_seq.setToolTip("Play Sequence on PB (needs PB)")
-        # self.btn_play_seq.setStyleSheet(
-        #     "QPushButton{background:#2d4a5f}QPushButton:hover{background:#3a6a7a}")
         self.btn_play_seq.clicked.connect(self._play_sequence)
         self.btn_play_seq.setEnabled(False)
         r1_sub.addWidget(self.btn_play_seq)
 
         self.btn_stop_seq = QPushButton("🛑 Stop")
         self.btn_stop_seq.setToolTip("Stop Sequence on PB (needs PB)")
-        # self.btn_stop_seq.setStyleSheet(
-        #     "QPushButton{background:#2d4a5f}QPushButton:hover{background:#3a6a7a}")
         self.btn_stop_seq.clicked.connect(self._stop_sequence)
         self.btn_stop_seq.setEnabled(False)
         r1_sub.addWidget(self.btn_stop_seq)
@@ -900,20 +937,16 @@ class SessionManager(QMainWindow):
         vl.addWidget(config_grp)
 
         vl.addSpacing(10)
-        control_grp = QGroupBox("Experiment Config")
-        control_grp.setStyleSheet("""
-            QGroupBox {border-radius: 3px;
-            margin-top: 6px; padding-top: 14px}
-            QGroupBox::title {subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px}""")
+        control_grp = QGroupBox("Experiment Script")
         
         r1 = QVBoxLayout(control_grp)
         r1_sub = QHBoxLayout()
         r1_sub.addWidget(QLabel("Script File:"))
-        self.cb_scr = QComboBox()
-        self.cb_scr.currentTextChanged.connect(self._update_config_file_list)
+        self.script_combo = QComboBox()
+        self.script_combo.currentTextChanged.connect(self._update_config_file_list)
         self._refresh_script_file_list()
         self._update_script_list_display(); self._update_config_file_list()
-        r1_sub.addWidget(self.cb_scr)
+        r1_sub.addWidget(self.script_combo)
 
         self.open_script = QPushButton("🖋")
         self.open_script.setStyleSheet("""
@@ -922,7 +955,7 @@ class SessionManager(QMainWindow):
         """)
         self.open_script.setFixedSize(25, 28)
         self.open_script.setToolTip("Edit Config File")
-        self.open_script.clicked.connect(lambda: self._open_in_editor(self.cb_scr.currentText()))
+        self.open_script.clicked.connect(lambda: self._open_in_editor(self.script_combo.currentText()))
         r1_sub.addWidget(self.open_script)
 
         # Refresh button inline with combo
@@ -940,8 +973,6 @@ class SessionManager(QMainWindow):
 
         r1_sub = QHBoxLayout()
         r1_sub.addWidget(QLabel("Mode:"))
-        # self.cb_mode = QComboBox()
-        # self.cb_mode.addItems(['Sweep', 'Timeseries'])
         r1_sub.addStretch()
         self.cb_mode = SegmentedButton(['Sweep', 'Timeseries'])
         self.cb_mode.valueChanged.connect(self.toggle_ts_duration)
@@ -956,69 +987,63 @@ class SessionManager(QMainWindow):
 
         self.txt_ts_duration = QLineEdit("0")
         self.txt_ts_duration.setMaximumWidth(60)
-        self.txt_ts_duration.setToolTip(
-            "Timeseries auto-stop duration in seconds.\n"
-            "0 = manual stop only.\n"
-            "Press Enter to apply mid-acquisition.")
+        self.txt_ts_duration.setToolTip("Timeseries auto-stop duration in seconds.\n"
+            "0 = manual stop only.\nPress Enter to apply mid-acquisition.")
         self.txt_ts_duration.returnPressed.connect(self._apply_ts_duration)
         r1_sub.addWidget(self.txt_ts_duration)
         self.toggle_ts_duration(0)
         
         r1.addLayout(r1_sub)
-        # r1.addStretch(50)
         vl.addWidget(control_grp)
 
         vl.addSpacing(10)
         plot_grp = QGroupBox("Experiment Plot")
-        plot_grp.setStyleSheet("""
-            QGroupBox {border-radius: 3px;
-            margin-top: 6px; padding-top: 14px }
-            QGroupBox::title {
-            subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px}""")
         r1 = QVBoxLayout(plot_grp)
 
         r1_sub = QHBoxLayout()
-        r1_sub.addWidget(QLabel("Real-time plot"))
+        r1_sub.addWidget(QLabel("Contrast RT"))
         self.chk_rt = ToggleSwitch()
         self.chk_rt.setChecked(True)
         r1_sub.addWidget(self.chk_rt)
-        # r1_sub.addSpacing(10)
         r1_sub.addStretch()
         
         # Contrast operation selector
         r1_sub.addWidget(QLabel("Contrast:"))
         self.cb_contrast = QComboBox()
-        self.cb_contrast.addItems(['s/r', 'r/s', '(s-r)/(s+r)',
-                                   's-r', 'r-s'])
-        self.cb_contrast.setToolTip(
-            "Contrast operation for real-time display.\n"
-            "s = signal mean, r = reference mean.")
-        r1_sub.addWidget(self.cb_contrast)
+        self.cb_contrast.addItems(['s/r', 'r/s', '(s-r)/(s+r)', 's-r', 'r-s'])
+        self.cb_contrast.setToolTip("Contrast operation for real-time display.\n"
+                                    "s = signal mean, r = reference mean.")
+        r1_sub.addWidget(self.cb_contrast);     r1.addLayout(r1_sub)
 
+        r1_sub = QHBoxLayout()
+        r1_sub.addWidget(QLabel("Raw RT"))
+        self.chk_raw_rt = ToggleSwitch()
+        self.chk_raw_rt.setChecked(True)
+        r1_sub.addWidget(self.chk_raw_rt);      r1_sub.addStretch()
+
+        self.tear_plot_btn = QPushButton("Clear Plot")
+        self.tear_plot_btn.clicked.connect(self._teardown_dynamic_plots)
+        r1_sub.addWidget(self.tear_plot_btn)
         r1.addLayout(r1_sub)
+
         vl.addWidget(plot_grp)
         vl.addSpacing(10)
 
         # ── Autosave section (HCImageLive-style) ────────────────────        
         save_grp = QGroupBox("Save")
-        save_grp.setStyleSheet("""
-            QGroupBox{border-radius:3px;
-            margin-top:6px;padding-top:14px}
-            QGroupBox::title{subcontrol-origin:margin;
-            subcontrol-position:top left;padding:0 4px}""")
         sg_l = QVBoxLayout(save_grp)
 
         save_folder_layout = QHBoxLayout()
         save_folder_layout.addWidget(QLabel("Folder"))
         folder = Path(DEFAULT_SAVE_DIRECTORY) / time.strftime("%Y-%m-%d")
-        self.save_folder = QLineEdit(str(folder)); self.save_folder.end(False)
-        self.save_folder.textChanged.connect(lambda: self.assign_save_folder(self.save_folder.text()))
-        self.assign_save_folder(self.save_folder.text())
-        save_folder_layout.addWidget(self.save_folder)
+        self.save_folder_input = QLineEdit(str(folder)); self.save_folder_input.end(False)
+        self.save_folder_input.textChanged.connect(lambda: self.assign_save_folder(self.save_folder_input.text()))
+        self._make_new_folder(self.save_folder_input.text())
+        save_folder_layout.addWidget(self.save_folder_input)
 
         self.make_new_folder = QPushButton("⭐")
         self.make_new_folder.setStyleSheet("QPushButton{border-radius: 4px;padding: 5px 1px}")
-        self.make_new_folder.clicked.connect(lambda: self._make_new_folder(self.save_folder.text()))
+        self.make_new_folder.clicked.connect(lambda: self._make_new_folder(self.save_folder_input.text()))
         save_folder_layout.addWidget(self.make_new_folder)
         self.browse_btn = QPushButton("...")
         self.browse_btn.setStyleSheet("QPushButton{border-radius: 4px;padding: 5px 5px}")
@@ -1028,15 +1053,13 @@ class SessionManager(QMainWindow):
 
         save_text = QHBoxLayout()
         r_prefix = QVBoxLayout()
-        r_prefix.addWidget(QLabel("Prefix"))
-        self.txt_prefix = QLineEdit("data")
+        self.txt_prefix = QLineEdit(""); self.txt_prefix.setPlaceholderText("Prefix")
         self.txt_prefix.setToolTip("Base prefix for saved files")
         r_prefix.addWidget(self.txt_prefix)
         save_text.addLayout(r_prefix)
 
         r_suffix = QVBoxLayout()
-        r_suffix.addWidget(QLabel("Suffix"))
-        self.txt_suffix = QLineEdit("")
+        self.txt_suffix = QLineEdit(""); self.txt_suffix.setPlaceholderText("Suffix")
         self.txt_suffix.setToolTip("Optional suffix appended after number")
         r_suffix.addWidget(self.txt_suffix)
         save_text.addLayout(r_suffix)
@@ -1045,7 +1068,7 @@ class SessionManager(QMainWindow):
 
         r_num = QHBoxLayout()
         r_num.addWidget(QLabel("Start #:"))
-        self.spin_autosave_num = QSpinBox()
+        self.spin_autosave_num = QSpinBox(); self.spin_autosave_num.setMaximumHeight(25)
         self.spin_autosave_num.setRange(1, 99999)
         self.spin_autosave_num.setValue(1)
         self.spin_autosave_num.setToolTip("Auto-incrementing measurement number")
@@ -1056,55 +1079,54 @@ class SessionManager(QMainWindow):
         r_num.addWidget(self._lbl_collision)
         r_num.addStretch()
         
-        self.chk_timestamp = QCheckBox("Timestamp suffix")
-        self.chk_timestamp.setToolTip(
-            "Append _HHMMSS timestamp after suffix")
+        timestamp_widget = QVBoxLayout()
+        self.chk_timestamp = QCheckBox()
+        self.chk_timestamp.setToolTip("Append _HHMMSS timestamp after suffix")
+        self.chk_timestamp.stateChanged.connect(lambda: self.spin_autosave_num.setEnabled(not self.chk_timestamp.isChecked()))
         r_num.addWidget(self.chk_timestamp)
+        timestamp_widget.addWidget(QLabel("Timestamp suffix"))
+        self.timestamp = QLabel(f"HHMMSS"); self.timestamp.setStyleSheet("color: #888; font-size: 10px;")
+        timestamp_widget.addWidget(self.timestamp)
+        
+        r_num.addLayout(timestamp_widget)
         sg_l.addLayout(r_num)
-        sg_l.addSpacing(5)
+        sg_l.addStretch(5)
 
         # Wire collision check to all autosave widget changes
-        self.txt_prefix.textChanged.connect(
-            lambda: self._check_folder_collision())
-        self.spin_autosave_num.valueChanged.connect(
-            lambda: self._check_folder_collision())
-        self.txt_suffix.textChanged.connect(
-            lambda: self._check_folder_collision())        
+        self.txt_prefix.textChanged.connect(lambda: self._check_folder_collision())
+        self.spin_autosave_num.valueChanged.connect(lambda: self._check_folder_collision())
+        self.txt_suffix.textChanged.connect(lambda: self._check_folder_collision())        
 
         # ── Comments section (Phase 6) ──────────────────────────────
         sg_l.addWidget(QLabel("Comments:"))
         cmt_l = QHBoxLayout()
         self.txt_comment = QLineEdit()
         self.txt_comment.setPlaceholderText("Appended to params YAML")
-        # self.txt_comment.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.txt_comment.setToolTip(
-            "Comment saved into the param file.\n"
-            "Cleared after each measurement completes.\n"
-            "Use ◀/▶ to annotate previous/next measurement.")
+        # self.txt_comment.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)      # TODO: check behaviour
+        self.txt_comment.setToolTip("Comment saved into the param file.\n"
+                                    "Cleared after each measurement completes.\n"
+                                    "Use ◀/▶ to annotate previous/next measurement.")
         cmt_l.addWidget(self.txt_comment)
 
         self.btn_comment_prev = QPushButton("◀")
         self.btn_comment_prev.setFixedSize(28, 28)
         self.btn_comment_prev.setStyleSheet("QPushButton{padding: 2px 2px; font-size: 20px}")
-        self.btn_comment_prev.setToolTip(
-            "Write comment into the PREVIOUS measurement's param file")
+        self.btn_comment_prev.setToolTip("Write comment into the PREVIOUS measurement's param file")
         self.btn_comment_prev.clicked.connect(self._comment_prev)
         cmt_l.addWidget(self.btn_comment_prev)
 
         self.btn_comment_next = QPushButton("▶")
         self.btn_comment_next.setFixedSize(28, 28)
         self.btn_comment_next.setStyleSheet("QPushButton{padding: 2px 2px; font-size: 20px}")
-        self.btn_comment_next.setToolTip(
-            "Defer comment — write into the NEXT measurement's param file")
+        self.btn_comment_next.setToolTip("Defer comment — write into the NEXT measurement's param file")
         self.btn_comment_next.clicked.connect(self._comment_next)
         cmt_l.addWidget(self.btn_comment_next)
         sg_l.addLayout(cmt_l)
-        sg_l.addSpacing(10)
+        sg_l.addStretch(10)
 
         chk_save = QHBoxLayout()
         chk_save.addWidget(QLabel("Autosave"))
         self.chk_autosave = ToggleSwitch(); self.chk_autosave.setChecked(True)
-        # self.chk_autosave.stateChanged.connect(self._on_toggle_autosave)
         self.chk_autosave.stateChanged.connect(lambda:
                                                self.save_data_manually.setEnabled(
                                                    not self.chk_autosave.isChecked()))
@@ -1112,9 +1134,9 @@ class SessionManager(QMainWindow):
         chk_save.addStretch()
 
         self.save_data_manually = QPushButton("Save Data"); self.save_data_manually.setEnabled(False)
-        self.save_data_manually.setFixedSize(100, 45)
+        self.save_data_manually.setFixedSize(100, 35)
         self.save_data_manually.setToolTip("Save Data when Autosave is OFF.\nBut how to save? Autosave saves after each run!")
-        # self.save_data_manually.clicked.connect(self._manual_save_data)   # TODO: wire manual data save
+        self.save_data_manually.clicked.connect(self._manual_save_data)
         chk_save.addWidget(self.save_data_manually)
         sg_l.addLayout(chk_save)
 
@@ -1125,7 +1147,7 @@ class SessionManager(QMainWindow):
         self.btn_run = QPushButton("▶ RUN")
         self.btn_run.setStyleSheet("""
             QPushButton{background:#0e639c;font-weight:bold;
-            font-size:14px;padding:8px}
+            font-size:14px;padding:6px 3px}
             QPushButton:hover{background:#1177bb;}
             QPushButton:disabled{background:#5e5e5e;color:#a6a6a6;}""")
         self.btn_run.clicked.connect(self._run_experiment)
@@ -1135,7 +1157,7 @@ class SessionManager(QMainWindow):
         self.btn_stop = QPushButton("🛑 STOP")
         self.btn_stop.setStyleSheet("""
             QPushButton{background:#6c1d1d;font-weight:bold;
-            font-size:14px;padding:8px}
+            font-size:14px;padding:6px 3px}
             QPushButton:hover{background:#8b2222;}""")
         self.btn_stop.clicked.connect(self._stop_experiment)
         self.btn_stop.setEnabled(False)
@@ -1148,12 +1170,12 @@ class SessionManager(QMainWindow):
             "and returns session to idle — without closing the UI.")
         self.btn_abort.setStyleSheet("""
             QPushButton{background:#8b0000;font-weight:bold;color:#ffc0c0;
-            font-size:14px;padding:8px}
+            font-size:14px;padding:6px 3px}
             QPushButton:hover{background:#a00000}""")
         self.btn_abort.clicked.connect(self._abort_experiment)
         self.btn_abort.setEnabled(False)
         r2.addWidget(self.btn_abort)
-
+        vl.addStretch(1)
         vl.addLayout(r2)
         return w
 
@@ -1169,11 +1191,8 @@ class SessionManager(QMainWindow):
         self.txt_ts_duration.setVisible(is_timeseries)
     
     def on_script_file_changed(self):
-        script_file = self.cb_scr.currentText()
-        # if 'camera' in script_file:
+        script_file = self.script_combo.currentText()
         self._refresh_config_file_list(script_file=script_file)
-        # elif 'diode' in script_file:
-        #     self._refresh_config_file_list(filter='diode')
         
     def _open_in_editor(self, file:str='', editor:str='vscode'):
         if editor == 'vscode':
@@ -1193,7 +1212,7 @@ class SessionManager(QMainWindow):
             else:
                 subprocess.Popen(['notepad.exe', clean_path])
         except Exception as e:
-            print(f"Failed to launch: {e}")
+            printt(f"Failed to launch: {e}")
     
     def _build_metadata_tab(self):
         w = QWidget(); vl = QVBoxLayout(w); vl.setContentsMargins(4,4,4,4)
@@ -1223,63 +1242,64 @@ class SessionManager(QMainWindow):
         self._ipy_widget = None
         self._ipy_kernel = None
 
-        if not _HAS_QTCONSOLE:
-            lbl = QLabel("qtconsole not installed.\n"
-                         "pip install qtconsole ipykernel")
-            lbl.setStyleSheet("padding:20px")
-            lbl.setAlignment(Qt.AlignCenter)
-            vl.addWidget(lbl)
-            return w
-
         try:
             # Kernel (in-process — shares GIL + memory with session)
-            km = QtInProcessKernelManager()
-            km.start_kernel()
-            kc = km.client()
-            kc.start_channels()
-            self._ipy_kernel = km
+            kernel_manager = QtInProcessKernelManager()
+            kernel_manager.start_kernel()
+
+            # Configure History Length directly via the live shell instance
+            shell = kernel_manager.kernel.shell
+            shell.history_manager.history_length = 50000
+            shell.history_manager.history_load_length = 20000
+            # Fix Tab Completion: Turn off Jedi within the embedded shell
+            # Prevents asynchronous thread deadlocks common in GUI-shared GIL processes.
+            shell.Completer.use_jedi = False
+
+            kernel_client = kernel_manager.client()
+            kernel_client.start_channels()
+            self._ipy_kernel = kernel_manager
 
             # Console widget
-            cw = RichIPythonWidget()
-            cw.kernel_manager = km
-            cw.kernel_client = kc
-            cw.syntax_style = 'solarized-dark'  # Configure pygments style after widget is created # Dark theme
-            cw.style_sheet = "" # Clear default style first
+            console_widget = RichIPythonWidget()
+            console_widget.buffer_size = 10000      # type: ignore
+            console_widget.kernel_manager = kernel_manager
+            console_widget.kernel_client = kernel_client
+            console_widget.syntax_style = 'solarized-dark'  # type: ignore # Configure pygments style after widget is created # Dark theme
+            # Fix Tab Completion Visuals: Explicitly tell the UI how to present suggestions
+            console_widget.completion_mode = 'droplist' # type: ignore # Options: 'droplist' (dropdown), 'plain', or 'ncurses'
+            console_widget.style_sheet = "" # type: ignore # Clear default style first
 
-            # MANUAL COLOR CONFIGURATION - This should work!
-            # Set ANSI colors manually (this is what controls syntax highlighting)
-            cw.ansi_codes = True  # Enable ANSI color codes
-            cw.kind = 'rich'  # Use rich text formatting
+            # MANUAL COLOR CONFIGURATION - Set ANSI colors manually (controls syntax highlighting)
+            console_widget.ansi_codes = True    # type: ignore # Enable ANSI color codes
+            console_widget.kind = 'rich'        # type: ignore # Use rich text formatting
 
-            # Set individual colors for syntax elements
-            # These correspond to pygments token types
-            cw._ansi_color_names = [
+            # Set individual colors for syntax elements - correspond to pygments token types
+            console_widget._ansi_color_names = [    # type: ignore
                 'black', 'darkred', 'darkgreen', 'brown',
                 'darkblue', 'darkviolet', 'steelblue', 'grey',
                 'lightgrey', 'red', 'green', 'yellow',
                 'blue', 'violet', 'lightblue', 'white'
             ]
             
-            cw.style_sheet = ("""
-                QPlainTextEdit, QTextEdit {
+            console_widget.style_sheet = (      # type: ignore
+                """QPlainTextEdit, QTextEdit {
                     background-color: #002b36;   /* Solarized Base03 (Background) */
                     color: #839496;              /* Solarized Base0 (Foreground) */
                     selection-background-color: #073642; /* Solarized Base02 */
                     selection-color: #93a1a1;    /* Solarized Base1 */
                     font-family: 'Consolas', 'Monaco', monospace;
-                    font-size: 11pt;
+                    font-size: 10pt;
                     border: none;
                 }
                 .in-prompt { color: #00ff00; font-weight: normal; }
                 .out-prompt { color: #00ff00; font-weight: normal; }
                 .error { color: #dc322f; }
             """)
-            cw.in_prompt_style = "color: #00ff00; font-weight: bold;"
-            cw.out_prompt_style = "color: #dc322f; font-weight: bold;"
+            console_widget.in_prompt_style = "color: #00ff00; font-weight: bold;"   # type: ignore
+            console_widget.out_prompt_style = "color: #dc322f; font-weight: bold;"  # type: ignore
 
-            # Manually set color mappings for different text types
-            # This is the key part that makes colors work!
-            cw._ansi_foreground_colors = {
+            # Manually set color mappings for different text types - this makes colors work
+            console_widget._ansi_foreground_colors = {  # type: ignore
                 0: QColor("#073642"),  # Base02 (Black)
                 1: QColor("#dc322f"),  # Red
                 2: QColor("#859900"),  # Green
@@ -1297,7 +1317,7 @@ class SessionManager(QMainWindow):
                 14: QColor("#93a1a1"), # Base1 (Bright Cyan)
                 15: QColor("#fdf6e3"), # Base3 (Bright White)
             }
-            cw._ansi_background_colors = {
+            console_widget._ansi_background_colors = {  # type: ignore
                 0: QColor(0, 0, 0),
                 1: QColor(205, 0, 0),
                 2: QColor(0, 205, 0),
@@ -1308,11 +1328,10 @@ class SessionManager(QMainWindow):
                 7: QColor(229, 229, 229),
             }
 
-            self._ipy_widget = cw
-            vl.addWidget(cw)
+            self._ipy_widget = console_widget
+            vl.addWidget(console_widget)        # type: ignore
 
-            # Push initial namespace (instruments not yet connected)
-            self._push_namespace(banner=True)
+            self._push_namespace(banner=True)   # Push initial namespace (instruments not yet connected)
 
         except Exception as e:
             lbl = QLabel(f"Console init failed:\n{e}")
@@ -1327,7 +1346,7 @@ class SessionManager(QMainWindow):
 
         Called:
           - Once at console creation (with banner=True)
-          - After each sweep experiment completes (_on_done)
+          - After each sweep experiment completes (_on_exp_done)
           - After each timeseries stops (_ts_stop)
           - After instrument init
 
@@ -1344,8 +1363,7 @@ class SessionManager(QMainWindow):
             'ao_task': self.ao_task,
             'cfg': self._loaded_config,
             'exp': self.last_exp,
-            'data': (self.last_exp.data_array
-                     if self.last_exp is not None else None),
+            'data': (self.last_exp.data_array if self.last_exp is not None else None),
         }
 
         # Timeseries experiment if available
@@ -1360,12 +1378,13 @@ class SessionManager(QMainWindow):
         self._ipy_kernel.kernel.shell.push(ns)
 
         if banner:
+            assert self._ipy_widget is not None
             self._ipy_widget.execute(
-                'import numpy as np, matplotlib.pyplot as plt, matplotlib\n'
-                'matplotlib.use("QtAgg")    # Force the backend to Qt\n'
+                'import numpy as np, matplotlib.pyplot as plt, matplotlib as mpl\n'
+                'mpl.use("QtAgg")    # Force the backend to Qt\n'
                 'plt.style.use("dark_background")\n'
-                # If you want to switch back to inline later:
-                # matplotlib.use('module://matplotlib_inline.backend_inline')
+                'plt.rcParams["axes.prop_cycle"] = mpl.rcParamsOrig["axes.prop_cycle"]\n'
+                # 'matplotlib.use("module://matplotlib_inline.backend_inline")\n'   # If you want to switch back to inline later:
                 'print("\\033[96m" + "─"*44 + "\\033[0m")\n'
                 'print("\\033[96m  NV Session Console\\033[0m")\n'
                 'print("\\033[96m" + "─"*44 + "\\033[0m")\n'
@@ -1408,11 +1427,11 @@ class SessionManager(QMainWindow):
             self.status_label.setText("✔ Instruments initialized")
         except Exception as e:
             self.status_label.setText(f"❌ {e}")
-            print(traceback.format_exc())
+            printt(traceback.format_exc())
 
     def _init_sg(self, simulate=False):
         if simulate:
-            self.sg = SignalGenerator_sim()
+            self.sg = SignalGenerator_sim()     # type: ignore
             self.lbl_sg.setText("SG:  ● simulated")
         else:
             self.sg = SignalGenerator()
@@ -1424,17 +1443,18 @@ class SessionManager(QMainWindow):
             self.status_label.setText("Initializing PB…"); QApplication.processEvents()
             self._do_init_pb()
             self._update_seq_btns()
-            self.status_label.setText("✔ PB ready — View/Play enabled")
+            assert self.pb is not None
+            self.status_label.setText(f"✔ PB: v{self.pb.pb_version} ready — View/Play enabled")
         except Exception as e:
-            self.status_label.setText(f"❌ PB: {e}"); print(traceback.format_exc())
+            self.status_label.setText(f"❌ PB: {e}"); printt(traceback.format_exc())
 
     def _do_init_pb(self):
-        base = {'pb':{'clk_cyc':1e3/concfg.PBclk},'scan':{},'seq':{},'mw':{}}
+        base = {'pb':{'clk_cyc':1e3/PB_CLK},'scan':{},'seq':{},'mw':{}}
         self.pb = PulseBlaster(base); self.pb.configure()
         self.lbl_pb.setText("PB:  ● configured")
         self._pb_ready = True
 
-    def _init(self, name: str):
+    def _init_instr(self, name: str):
         """Init a single instrument."""
         try:
             if name == 'SG':
@@ -1451,7 +1471,6 @@ class SessionManager(QMainWindow):
             self.status_label.setText(f"❌ Init {name} Failed: {e}")
     
     def _update_seq_btns(self):
-        # self.btn_view_seq.setEnabled(self._pb_ready)
         self.btn_play_seq.setEnabled(self._pb_ready)
 
     def _on_toggle_autosave(self):
@@ -1467,7 +1486,6 @@ class SessionManager(QMainWindow):
         if not running:
             self._update_seq_btns()
         else:
-            # self.btn_view_seq.setEnabled(False)
             self.btn_play_seq.setEnabled(False)
 
     def _abort_experiment(self):
@@ -1511,7 +1529,7 @@ class SessionManager(QMainWindow):
                     exp.stop()
                     exp.teardown()
                 except Exception as e:
-                    print(f"  abort teardown {attr}: {e}")
+                    printt(f"  abort teardown {attr}: {e}")
                 setattr(self, attr, None)
 
         # ── Stop PB (it may be looping) ──
@@ -1523,7 +1541,7 @@ class SessionManager(QMainWindow):
 
         self._set_running_state(False)
         if getattr(self, '_is_camera_run', False):
-            self._is_camera_run = False
+            self.is_camera_run = False
         
         self.status_label.setText("⚠ Aborted — session idle, instruments connected")
         self._push_namespace()
@@ -1568,7 +1586,7 @@ class SessionManager(QMainWindow):
                 self._push_namespace()
         except Exception as e:
             self.status_label.setText(f"❌ Camera init: {e}")
-            print(traceback.format_exc())
+            printt(traceback.format_exc())
 
     def _eject_camera(self):
         """Disconnect and release camera resources."""
@@ -1603,76 +1621,105 @@ class SessionManager(QMainWindow):
         any hardware — just refreshes the Python module objects so that
         subsequent experiments use the updated code.
         """
-        modules_to_reload = [
-            'connectionConfig',
-            'spinapi',
-            'sequencecontrol',
-            'PBcontrol',
-            'SGcontrol',
-            'DAQcontrol',
-            'sweep_utils',
-            'experiment_base',
-            'camera_experiment',
-            'timeseries_experiment',
-            'Camcontrol',
-        ]
+        modules_to_reload = sorted([ 'experiment_config', 'spinapi', 'sequencecontrol',
+            'PBcontrol', 'SGcontrol', 'DAQcontrol', 'sweep_utils',
+            'experiment_base', 'camera_experiment', 'timeseries_experiment',
+            'Camcontrol', 
+        ])
+        deeper_modules = ['control_daq_sequences', 'control_camera_sequences',]
         reloaded = []
         failed = []
-        for name in modules_to_reload:
-            if name in sys.modules:
+
+        # Reload deeper modules first
+        for module in deeper_modules:
+            if module in sys.modules:
                 try:
-                    importlib.reload(sys.modules[name])
-                    reloaded.append(name)
+                    importlib.reload(sys.modules[module])
+                    reloaded.append(module)
                 except Exception as e:
-                    failed.append(f"{name}: {e}")
+                    failed.append(f"{module}: {e}")
+
+        # Reload upper modules later
+        for module in modules_to_reload:
+            if module in sys.modules:
+                try:
+                    importlib.reload(sys.modules[module])
+                    reloaded.append(module)
+                except Exception as e:
+                    failed.append(f"{module}: {e}")
 
         msg = f"✔ Reloaded: {', '.join(reloaded)}"
         if failed:
             msg += f"  ⚠ {', '.join(failed)} failed"
-            # for f in failed:
-            #     print(f"  ❌ {f}")
         self.status_label.setText(msg)
-        # print(f"  Reloaded: {', '.join(reloaded)}")
 
     # ── TOOL LAUNCHERS (subprocess — fire and forget) ──────────────
 
     def _launch_tool(self, script_name: str):
-        """Launch a tool script in a separate process.
+        """Launch a tool script in a separate process using QProcess."""
+        script: Path = Path('')
+        tool_found = None
 
-        The child process is fully independent — it manages its own
-        DAQ tasks, PB connection, etc.  No parameter return needed
-        for DAQ Scope or PB GUI (they don't modify session state).
-        """
-        # FIXME: it requires clicking twice after closing. Fix it!
+        # Locate the script
         for tool in self.tools:
-            candidate = Path(f'{DEFAULT_EXPERIMENT_DIRECTORY}/gui/{tool}') / script_name
+            candidate = (
+                Path(f"{DEFAULT_EXPERIMENT_DIRECTORY}/gui/{tool}") / script_name
+            )
             if candidate.exists():
                 script = candidate
+                tool_found = tool
                 break
-        
-        if not 1 in self.tools[tool]:
-            self.tools[tool] = [1]
+
+        # Safety check if no tool/script matches
+        if not tool_found:
+            self.status_label.setText(f"❌ Script not found: {script_name}")
+            return
+
+        # Check if process is NOT currently active
+        if 1 not in self.tools[tool_found]:
             try:
-                proc = subprocess.Popen(
-                    [sys.executable, str(script)],
-                    cwd=str(script.parent) if script.parent != Path('.') else None,
-                )
-                self.tools[tool].append(proc)
-                self.status_label.setText(f"✔ Launched {script_name} (PID {proc.pid})")
+                proc = QProcess(self)   # Create QProcess and bind its lifecycle to this class instance
+
+                if script.parent != Path("."):
+                    proc.setWorkingDirectory(str(script.parent)) # Set working directory (replaces cwd)
+
+                # Connect the asynchronous finished signal using a lambda to pass the tool name
+                proc.finished.connect( lambda exit_code, exit_status,
+                                      t=tool_found: self._on_tool_finished(t, exit_code)
+                                      )
+                
+                if tool_found.lower() == 'pb':
+                    self._eject('PB')
+                
+                proc.start(sys.executable, [str(script)])       # Start process asynchronously
+
+                self.tools[tool_found] = [1, proc]  # Maintain tracking list to avoid breaking other logic
+
+                pid = proc.processId()      # Grab PID (replaces proc.pid)
+                self.status_label.setText(f"✔ Launched {script_name} (PID {pid})")
+
             except Exception as e:
                 self.status_label.setText(f"❌ Launch {script_name}: {e}")
-
         else:
-            status = self.tools[tool][-1].poll()    # Check process status
+            proc = self.tools[tool_found][-1]   # Process tracker exists, inspect its current Qt state
 
-            if status is None:
-                # print("Process is still running.")
-                bring_window_to_front(self.tools[tool][-1].pid)
+            if isinstance(proc, QProcess) and proc.state() == QProcess.ProcessState.Running:
+                bring_window_to_front(proc.processId())
             else:
-                self.tools[tool] = [0]
-                print(f"Process has terminated with return code: {status}")
+                # Fallback clean-up if process ended but state hasn't updated yet
+                self.tools[tool_found] = [0]
+                self.status_label.setText(
+                    "Process was detected as terminated during explicit poll.")
+
+
+    def _on_tool_finished(self, tool: str, exit_code: int):
+        """Asynchronous callback triggered automatically when the QProcess exits."""
+        self.tools[tool] = [0]
+        self.status_label.setText(
+            f"Process for {tool} has terminated with return code: {exit_code}")
+        if tool.lower() == 'pb':
+            self._init_pb()
         
-        # print(self.tools)
     # ════════════════════════════════════════════════════════════════
     #  CAMERA VIEWER (in-process — can read back settings)
     # ════════════════════════════════════════════════════════════════
@@ -1701,7 +1748,7 @@ class SessionManager(QMainWindow):
         try:
             camera_dir = os.path.abspath(rf'{DEFAULT_EXPERIMENT_DIRECTORY}/gui/camera')
             sys.path.append(camera_dir)
-            from cam_v2_main import CameraViewerV2
+            from cam_v2_main import CameraViewerV2      # type: ignore
 
             self._camera_viewer = CameraViewerV2()
             self._camera_viewer.setWindowTitle("Camera Viewer v2 — Session")
@@ -1718,7 +1765,7 @@ class SessionManager(QMainWindow):
 
         except Exception as e:
             self.status_label.setText(f"❌ Camera Viewer: {e}")
-            print(traceback.format_exc())
+            printt(traceback.format_exc())
 
     def _get_camera_viewer_settings(self) -> dict:
         """Read back camera settings from viewer (if open).
@@ -1747,20 +1794,6 @@ class SessionManager(QMainWindow):
             return {}
 
     # ── HCIMAGELIVE LAUNCHER (subprocess — high-speed streaming) ─────────
-
-    # Common install paths for HCImageLive
-    _HCIMAGELIVE_PATHS = [
-        r"C:\Program Files\HCImageLive\HCImageLive.exe"
-    ]
-
-    def _find_hcimagelive(self) -> Optional[str]:
-        """Find HCImageLive.exe on the system."""
-        for p in self._HCIMAGELIVE_PATHS:
-            if Path(p).exists():
-                return p
-        found = shutil.which("HCImageLive")
-        return found
-
     def _launch_hcimagelive(self):
         """Launch HCImageLive.exe for high-speed streaming.
 
@@ -1772,69 +1805,71 @@ class SessionManager(QMainWindow):
         Camera settings (exposure, ROI) set via DCAM properties persist
         on the hardware, so HCImageLive inherits them.
         """
-        # Check if already running
-        if self._hci_process is not None and self._hci_process.poll() is None:
-            self.status_label.setText("HCImageLive already running")
-            return
 
-        # Find executable
-        exe = self._find_hcimagelive()
+        # Initialize the process instance if it doesn't exist
+        if not hasattr(self, "_hci_process") or self._hci_process is None:
+            self._hci_process = QProcess(self)
+        
+        _HCIMAGELIVE_PATHS = [  # Common install paths for HCImageLive
+                r"C:\Program Files\HCImageLive\HCImageLive.exe",
+            ]
+        exe = None
+        for p in _HCIMAGELIVE_PATHS:    # Find executable
+            if Path(p).exists():
+                exe = p
+                break
+        
+        if exe is None:
+            exe = shutil.which("HCImageLive")
+        
         if exe is None:
             self.status_label.setText("❌ HCImageLive.exe not found")
             QMessageBox.warning(
                 self, "HCImageLive",
                 "Could not find HCImageLive.exe.\n\n"
                 "Searched:\n" +
-                "\n".join(f"  • {p}" for p in self._HCIMAGELIVE_PATHS) +
+                "\n".join(f"  • {p}" for p in _HCIMAGELIVE_PATHS) +
                 "\n\nInstall from Hamamatsu or add to PATH.")
             return
-
-        # Disconnect camera from viewer (DCAM exclusive access)
+        
         if self._camera_viewer is not None:
-            try:
+            try:        # Disconnect camera from viewer (DCAM exclusive access)
                 self._camera_viewer._disconnect_camera()
+                # Process events to let GUI update, then block briefly for DCAM cleanup
                 self.status_label.setText("Camera released for HCImageLive...")
                 QApplication.processEvents()
-                time.sleep(0.3)  # Brief pause for DCAM cleanup
+                # time.sleep(0.3)  # Brief pause for DCAM cleanup
+                QProcess.execute(
+                    "ping", ["-n", "1", "127.0.0.1"]
+                )           # Pure non-blocking safe delay alternative to time.sleep
             except Exception as e:
-                print(f"Camera disconnect warning: {e}")
-
-        # Launch
-        try:
-            self._hci_process = subprocess.Popen([exe])
-            self.lbl_cam.setText("Cam: ● HCImageLive")
-            self.status_label.setText(f"✔ HCImageLive launched (PID {self._hci_process.pid})")
-            # self.btn_launch_hci.setStyleSheet("QPushButton{background:#2d4a2d}QPushButton:hover{background:#3a5f3a}")
-            self.btn_launch_hci.setText("▶ HCI running...")
-            self.btn_launch_hci.setEnabled(False)
-
-            # Start polling for exit
-            self._hci_watcher = QTimer(self)
-            self._hci_watcher.timeout.connect(self._poll_hcimagelive)
-            self._hci_watcher.start(1000)  # Check every second
+                printt(f"Camera disconnect warning: {e}")
+        
+        try:        # Launch process
+            if (isinstance(self._hci_process, QProcess) and self._hci_process.state() == QProcess.ProcessState.Running):
+                bring_window_to_front(self._hci_process.processId())
+            else:
+                self._hci_process.finished.connect(self._on_hcimagelive_finished)
+                self._hci_process.start(exe)        # Start the external program
+                self.lbl_cam.setText("Cam: ● HCImageLive")
+                self.status_label.setText(f"✔ HCImageLive launched (PID {self._hci_process.processId()})")
 
         except Exception as e:
             self.status_label.setText(f"❌ HCImageLive: {e}")
-            print(traceback.format_exc())
+            printt(traceback.format_exc())
+                
+    def _on_hcimagelive_finished(self, exit_code):
+        """Event-driven callback. Reconnects camera when HCImageLive exits."""
+        self.status_label.setText(
+            f"HCImageLive closed (Code: {exit_code}) — reconnect via Camera menu in viewer"
+        )
+        # Clean up state tracker
+        self._hci_process = None
+        self.lbl_cam.setText("Cam: ○ HCI closed")
+        self.status_label.setText("HCImageLive closed — camera available")
 
-    def _poll_hcimagelive(self):
-        """Poll HCImageLive process — reconnect camera when it exits."""
-        if self._hci_process is None or self._hci_process.poll() is not None:
-            # Process has exited
-            if self._hci_watcher is not None:
-                self._hci_watcher.stop()
-                self._hci_watcher = None
-
-            self._hci_process = None
-            self.btn_launch_hci.setText("🎥 HCImageLive")
-            self.btn_launch_hci.setEnabled(True)
-            # self.btn_launch_hci.setStyleSheet("QPushButton{background:#2d2d2d}")
-            self.lbl_cam.setText("Cam: ○ HCI closed")
-            self.status_label.setText("HCImageLive closed — camera available")
-
-            # Offer to reconnect camera in viewer
-            if self._camera_viewer is not None and self._camera_viewer.isVisible():
-                self.status_label.setText(
+        if self._camera_viewer is not None and self._camera_viewer.isVisible():
+            self.status_label.setText(
                     "HCImageLive closed — reconnect via Camera menu in viewer")
 
     # ── CONTRAST DISPLAY HELPER ────────────────────────────────────
@@ -1861,8 +1896,8 @@ class SessionManager(QMainWindow):
 
     # ── AUTOSAVE — HCImageLive-style naming ────────────────────────────────
 
-    def _make_folder_number(self, bump_on_collision: bool = True) -> str:
-        """Build the folder_number string from autosave widgets.
+    def _make_folder(self, bump_on_collision: bool = True) -> Tuple[Path, int | str]:
+        """Build the folder_number string and folder path from autosave widgets.
 
         Pattern: {prefix}_{number:03d}[_{suffix}][_{HHMMSS}]
         Also auto-increments spin_autosave_num for next run.
@@ -1871,84 +1906,68 @@ class SessionManager(QMainWindow):
         already exists under today's date directory, keeps incrementing
         the number until a free slot is found.
         """
-        prefix = self.txt_prefix.text().strip() or "data"
-        num = self.spin_autosave_num.value()
+
+        prefix = self.txt_prefix.text().strip()
         suffix = self.txt_suffix.text().strip()
-        ts = datetime.now().strftime('%H%M%S') if self.chk_timestamp.isChecked() else ''
+        dd = Path(self.save_folder_path)
 
-        dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
-
-        if bump_on_collision and dd.exists():
-            # Scan forward until we find a free number
-            for _ in range(1000):
-                parts = [prefix, f"{num:03d}"]
-                if suffix:
-                    parts.append(suffix)
-                # Don't include timestamp in collision check (it changes)
-                fn_check = '_'.join(parts)
-                if not (dd / f"meas_{fn_check}").exists():
-                    break
-                # Also check with timestamp variants (any HHMMSS)
-                pattern = str(dd / f"meas_{fn_check}*")
-                if not glob.glob(pattern):
-                    break
-                num += 1
-            # Update spinbox to reflect the resolved number
-            self.spin_autosave_num.setValue(num)
-
-        parts = [prefix, f"{num:03d}"]
-        if suffix:
-            parts.append(suffix)
-        if ts:
-            parts.append(ts)
-        fn = '_'.join(parts)
-
-        # Auto-increment for next run
-        self.spin_autosave_num.setValue(num + 1)
-        return fn
-
-    def _preview_folder_name(self) -> str:
-        """Build a preview of the next folder name WITHOUT incrementing.
-
-        Used for the collision indicator in the UI.
-        """
-        prefix = self.txt_prefix.text().strip() or "data"
-        num = self.spin_autosave_num.value()
-        suffix = self.txt_suffix.text().strip()
-        parts = [prefix, f"{num:03d}"]
-        if suffix:
-            parts.append(suffix)
         if self.chk_timestamp.isChecked():
-            parts.append("HHMMSS")
-        return '_'.join(parts)
+            num = datetime.now().strftime('%H%M%S')
+            self.timestamp.setText(num)
+        else:
+            num = self.spin_autosave_num.value()
+            if bump_on_collision:
+                while True:
+                    if self._check_folder_collision():
+                        num += 1        # Scan forward until we find a free number
+                        self.spin_autosave_num.setValue(num)        # Update spinbox to reflect the resolved number
+                    else:
+                        break
+            else:
+                sp, num = self._last_save_path, self._last_folder_number
+        
+        self.folder_labels = [prefix, str(num), suffix]
+        all_parts = '_'.join([label for label in self.folder_labels if not label == ''])
+        sp = dd / f"meas_{all_parts}"; sp.mkdir(exist_ok=True)
+        
+        return sp, num
 
-    def _check_folder_collision(self):
+    def _check_folder_collision(self) -> bool:
         """Update the collision indicator label.
 
         Called when prefix, number, or suffix changes.
         Shows ✔ (free) or ✘ (exists) next to the autosave number.
         """
-        prefix = self.txt_prefix.text().strip() or "data"
-        num = self.spin_autosave_num.value()
+        prefix = self.txt_prefix.text().strip()
+        num = str(self.spin_autosave_num.value())
         suffix = self.txt_suffix.text().strip()
-        parts = [prefix, f"{num:03d}"]
-        if suffix:
-            parts.append(suffix)
-        fn_check = '_'.join(parts)
 
-        dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
-        folder = dd / f"meas_{fn_check}"
+        dd = Path(self.save_folder_path)
 
-        if folder.exists():
-            self._lbl_collision.setText("✘")
-            self._lbl_collision.setStyleSheet("color:#f44;font-weight:bold")
-            self._lbl_collision.setToolTip(
-                f"Folder exists: meas_{fn_check}\n"
-                f"Number will auto-bump at run time.")
+        labels = [prefix, num, suffix]
+        all_parts = '_'.join([label for label in labels if not label == ''])
+        sp = dd / f"meas_{all_parts}"
+
+        def collision_highlight(collided: bool, widget: QLabel) -> bool:
+            if collided:
+                widget.setText("✘")
+                widget.setStyleSheet("color:#f44;font-weight:bold")
+                widget.setToolTip(
+                    f"Folder exists: meas_{all_parts}\n"
+                    f"Number will auto-bump at run time.")
+            else:
+                self._lbl_collision.setText("✔")
+                self._lbl_collision.setStyleSheet("color:#6a9955;font-weight:bold")
+                self._lbl_collision.setToolTip(f"Free: meas_{all_parts}")
+            return collided
+
+        if sp.exists():
+            if any(sp.iterdir()):
+                return collision_highlight(collided=True, widget=self._lbl_collision)
+            else:
+                return collision_highlight(collided=False, widget=self._lbl_collision)
         else:
-            self._lbl_collision.setText("✔")
-            self._lbl_collision.setStyleSheet("color:#6a9955;font-weight:bold")
-            self._lbl_collision.setToolTip(f"Free: meas_{fn_check}")
+            return collision_highlight(collided=False, widget=self._lbl_collision)
 
     def _get_save_path_and_fn(self):
         """Return (save_path, folder_number) or (None, None) if autosave off.
@@ -1959,11 +1978,8 @@ class SessionManager(QMainWindow):
         if not self.chk_autosave.isChecked():
             return None, None
         # TODO: Custom folder to save..
-        fn = self._make_folder_number(bump_on_collision=True)
-        # dd = Path("..") / "Saved_Data" / time.strftime("%Y-%m-%d")
-        dd = Path(self.save_folder_path)
-        dd.mkdir(parents=True, exist_ok=True)
-        sp = dd / f"meas_{fn}"; sp.mkdir(exist_ok=True)
+        dd = Path(self.save_folder_path);   dd.mkdir(parents=True, exist_ok=True)
+        sp, fn = self._make_folder(bump_on_collision=True)
         self._last_save_path = sp
         self._last_folder_number = fn
         return sp, fn
@@ -2028,7 +2044,7 @@ class SessionManager(QMainWindow):
         if not pf.exists():
             pf = save_path / f"params_{folder_number}.json"
         if not pf.exists():
-            print(f"⚠ Cannot find params file for {folder_number}")
+            printt(f"⚠ Cannot find params file for {folder_number}")
             return
         try:
             ts = datetime.now().strftime('%H:%M:%S')
@@ -2046,9 +2062,9 @@ class SessionManager(QMainWindow):
                     f.write("\n_comments:\n")
                     f.write(line)
 
-            print(f"  💬 Comment → {pf.name}")
+            printt(f"  💬 Comment → {pf.name}")
         except Exception as e:
-            print(f"⚠ Comment save error: {e}")
+            printt(f"⚠ Comment save error: {e}")
 
     # ── SESSION STATE SAVE / LOAD (Phase 4) ──────────────────────────────
     def _build_state_controls(self, parent_layout: QVBoxLayout):
@@ -2124,7 +2140,7 @@ class SessionManager(QMainWindow):
             self.state_combo.addItem(Path(DEFAULT_STATE_FILE).stem, DEFAULT_STATE_FILE)
             if self.statefile_directory.exists():
                 json_files = sorted(self.statefile_directory.glob("*.json"))
-                # json_files.remove(self.statefile_directory / DEFAULT_STATE_FILE)
+
                 for f in json_files:
                     # if f.name != CHANNEL_CONFIG_FILE:
                     self.state_combo.addItem(f.stem, str(f))
@@ -2135,12 +2151,9 @@ class SessionManager(QMainWindow):
     def _save_session_state(self):
         """Save current session UI state to a JSON file."""
         try:
-            # Get filename from combo (typed or selected)
-            filename = Path(self.state_combo.currentText().strip())# if filename is None else Path(filename)
-
+            filename = Path(self.state_combo.currentText().strip()) # Get filename from combo (typed or selected)
             if not filename:
                 filename = Path(f"session_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-            
             # Remove .json extension if user typed it
             filepath = self.statefile_directory / filename.with_suffix('.json')
 
@@ -2148,16 +2161,18 @@ class SessionManager(QMainWindow):
                 'window_maximized': self.isMaximized(),
                 'window_width': self.width(),
                 'window_height': self.height(),
-                'script_file': self.cb_scr.currentText(),
+                'script_file': self.script_combo.currentText(),
                 'config_modules': self.last_used_configs,
                 'mode': self.cb_mode.currentText(),
                 'contrast_op': self.cb_contrast.currentText(),
                 'realtime_plot': self.chk_rt.isChecked(),
+                'raw_realtime_plot': self.chk_raw_rt.isChecked(),
                 'autosave_enabled': self.chk_autosave.isChecked(),
                 'autosave_prefix': self.txt_prefix.text(),
                 'autosave_start_num': self.spin_autosave_num.value(),
                 'autosave_suffix': self.txt_suffix.text(),
                 'autosave_timestamp': self.chk_timestamp.isChecked(),
+                'last_save_folder': str(self._last_save_path),
                 'sim_sg': self.simulate_checkboxes['SG'].isChecked(),
                 'ts_duration': self.txt_ts_duration.text(),
             }
@@ -2176,16 +2191,12 @@ class SessionManager(QMainWindow):
     def _load_session_state(self):
         """Load session UI state from a JSON file."""
         try:
-            filename = Path(self.state_combo.currentText().strip())# if filename is None else Path(filename)
-
+            filename = Path(self.state_combo.currentText().strip())
             if not filename:
                 self.status_label.setText("No state file specified")
                 return
             
             filepath = self.statefile_directory / filename.with_suffix(".json")
-            # else:
-            #     filepath = Path(filepath)
-
             if not filepath.exists():
                 self.status_label.setText(f"❌ Not found: {filename}.json")
                 return
@@ -2201,62 +2212,65 @@ class SessionManager(QMainWindow):
                 self.showMaximized()
             
             script_file = state.get('script_file', '')
-            self.cb_scr.setCurrentText(script_file)
+            self.script_combo.setCurrentText(script_file)
             self.last_used_configs = state.get('config_modules', '')
-            self.cb_cfg.setCurrentText(self.last_used_configs[0] if 'diode' in script_file else self.last_used_configs[1])
+            self.config_combo.setCurrentText(self.last_used_configs[0] if 'diode' in script_file else self.last_used_configs[1])
             self.cb_mode.setCurrentText(state.get('mode', 'Sweep'))
             self.cb_contrast.setCurrentText(state.get('contrast_op', 's/r'))
             self.chk_rt.setChecked(state.get('realtime_plot', True))
+            self.chk_raw_rt.setChecked(state.get('raw_realtime_plot', True))
             self.chk_autosave.setChecked(state.get('autosave_enabled', True))
-            self.txt_prefix.setText(state.get('autosave_prefix', 'data'))
-            self.spin_autosave_num.setValue(
-                state.get('autosave_start_num', 1))
+            self.txt_prefix.setText(state.get('autosave_prefix', ''))
+            autosave_num = state.get('autosave_start_num', 1)
+            last_save_path = state.get('last_save_folder', )
             self.txt_suffix.setText(state.get('autosave_suffix', ''))
-            self.chk_timestamp.setChecked(
-                state.get('autosave_timestamp', False))
+            self.chk_timestamp.setChecked(state.get('autosave_timestamp', False))
             self.simulate_checkboxes['SG'].setChecked(state.get('sim_sg', True))
             self.txt_ts_duration.setText(state.get('ts_duration', '0'))
 
-            self.status_label.setText(f"✔ State loaded: {filename}")
+            self.status_label.setText(f"✔ State loaded: {filename}"); printt(f"✔ State loaded: {filename}")
+            if time.strftime("%Y-%m-%d") in last_save_path:
+                self.spin_autosave_num.setValue(autosave_num)
+                self._last_save_path = Path(last_save_path)
+                self.save_folder_path = str(self._last_save_path.parent)
+                self.save_folder_input.setText(self.save_folder_path)
+            self._get_save_path_and_fn()
         except Exception as e:
             self.status_label.setText(f"❌ State load: {e}")
 
     # ── LOAD CONFIG ────────────────────────────────────────────────
 
     def _load_config(self):
-        cn = self.cb_cfg.currentText()
+        inputtext_config = self.config_combo.currentText()
         try:
-            cm = importlib.import_module(cn); importlib.reload(cm)
+            module_config = importlib.import_module(inputtext_config); importlib.reload(module_config)
         except Exception as e:
             self.status_label.setText(f"❌ Import: {e}"); return
-        if not hasattr(cm,'config'):
-            self.status_label.setText(f"❌ {cn} has no 'config'"); return
-        self._loaded_config = cm.config
-        self._loaded_config_name = cn
-        self._update_metadata_tree(cm.config)
+        if not hasattr(module_config,'config'):
+            self.status_label.setText(f"❌ {inputtext_config} has no 'config'"); return
+        self._loaded_config = module_config.config
+        self._loaded_config_name = inputtext_config
+        self._update_metadata_tree(module_config.config)
         self._on_config_load()
         self._push_namespace()
-        self.status_label.setText(f"✔ Loaded {cn}")
+        self.status_label.setText(f"✔ Loaded {inputtext_config}")
     
     def _on_config_load(self):
-        # self._tabs.setCurrentIndex(2)
         self._tabs.tabBar().setTabTextColor(2, QColor("#00ff00"))
-        # self._tabs.tabBar().setStyleSheet(
-        #     "QTabBar::tab:nth-child(3) { color: #00ff00; }"
-        # )
         QTimer.singleShot(5000,
-                        #   lambda: self._tabs.tabBar().setStyleSheet(
-                        #         "QTabBar::tab:nth-child(3) { color: #ffffff; }"
-                        #     )
                           lambda: self._tabs.tabBar().setTabTextColor(2, QColor("#ffffff"))
                           )
-        # self._tabs.tabBar().setTabTextColor(2, QColor("#00ff00"))
 
     def _ensure_config(self):
-        cn = self.cb_cfg.currentText()
-        if self._loaded_config is None or self._loaded_config_name != cn:
+        inputtext_config = self.config_combo.currentText()
+        if self._loaded_config is None or self._loaded_config_name != inputtext_config:
             self._load_config()
         return self._loaded_config
+
+    # ── MANUAL DATA SAVE ────────────────────────────────────────────────
+    # TODO: Session: Save after run without autosave ON - run a save command via the console??? Save the corresponding experiment variable.
+    def _manual_save_data(self):
+        pass
 
     # ── RUN ─────────────────────────────────────────────────────────────
 
@@ -2274,36 +2288,38 @@ class SessionManager(QMainWindow):
             self._run_sweep()
 
     def _run_sweep(self):
-        cn = self.cb_cfg.currentText(); sn = self.cb_scr.currentText()
+        inputtext_config = self.config_combo.currentText(); inputtext_script = self.script_combo.currentText()
         try:
-            cm = importlib.import_module(cn); importlib.reload(cm)
-            sm = importlib.import_module(sn); importlib.reload(sm)
+            module_config = importlib.import_module(inputtext_config); importlib.reload(module_config)
+            module_script = importlib.import_module(inputtext_script); importlib.reload(module_script)
         except Exception as e:
             self.status_label.setText(f"❌ Import: {e}"); return
 
-        if not hasattr(sm, 'run'):
-            self.status_label.setText(f"❌ {sn} has no run()"); return
+        if not hasattr(module_script, 'run'):
+            self.status_label.setText(f"❌ {inputtext_script} has no run()"); return
 
         # Get the ExperimentConfig object from config module
-        if not hasattr(cm, 'config'):
-            self.status_label.setText(f"❌ {cn} has no 'config' attribute"); return
+        if not hasattr(module_config, 'config'):
+            self.status_label.setText(f"❌ {inputtext_config} has no 'config' attribute"); return
         
-        exp_config = cm.config
+        exp_config = module_config.config
         self._loaded_config = exp_config
-        self._loaded_config_name = cn
+        self._loaded_config_name = inputtext_config
         self._update_metadata_tree(exp_config)
 
         # Detect camera experiment
         is_camera = self._is_camera_config(exp_config)
 
         # Build instruments dict
-        instr = {'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task}
+        instruments = {'sg': self.sg, 'pb': self.pb,
+                    #    'ao_task': self.ao_task,
+                       }
         
         if is_camera:
             cw = self._get_or_create_camera_worker(exp_config)
             if cw is None:
                 return
-            instr['camera_worker'] = cw
+            instruments['camera_worker'] = cw
 
         sp, fn = self._get_save_path_and_fn()
 
@@ -2311,8 +2327,7 @@ class SessionManager(QMainWindow):
         comment = self._get_current_comment()
         if comment:
             exp_config.extra = exp_config.extra or {}
-            exp_config.extra['_comment'] = (
-                f"[{datetime.now().strftime('%H:%M:%S')}] {comment}")
+            exp_config.extra['_comment'] = (f"[{datetime.now().strftime('%H:%M:%S')}] {comment}")
 
         # Switch plot layout based on experiment type
         if is_camera:
@@ -2321,21 +2336,21 @@ class SessionManager(QMainWindow):
             self._setup_diode_plots(exp_config)
 
         self._exp_config = exp_config
-        primary_name = exp_config.scan_names[0]
-        self._inner_vals = exp_config.scans[primary_name].values
-        self._xu = exp_config.plot.x_units
-        self._Nruns = exp_config.runtime.Nruns
-        self._is_camera_run = is_camera
+        primart_scan_name = exp_config.scan_names[0]
+        self.inner_vals = exp_config.scans[primart_scan_name].values
+        self.Nruns = exp_config.runtime.Nruns
+        self.is_camera_run = is_camera
 
-        # Thread
-        self.experiment_thread = ExperimentThread(sm.run, instr, exp_config, sp, fn)
+        # Thread    # module_script = mainControl_diode | mainControl_camera
+        self.experiment_thread = ExperimentThread(run_func=module_script.run, instruments=instruments,
+                                                  config=exp_config, save_path=sp, folder_number=fn) 
         self.experiment_thread.point_signal.connect(lambda *a: self._upd.emit(*a))
-        self.experiment_thread.finished_signal.connect(self._on_done)
+        self.experiment_thread.finished_signal.connect(self._on_exp_done)
         self.experiment_thread.error_signal.connect(self._on_err)
         self.experiment_thread.start()
 
         self._set_running_state(True)
-        self.status_label.setText(f"Running {cn}…")
+        self.status_label.setText(f"Running {inputtext_config}...")
 
     # ── TIMESERIES DURATION ──────────────────────────────────
 
@@ -2410,35 +2425,34 @@ class SessionManager(QMainWindow):
     # ── RUN TIMESERIES ────────────────────────────────────────────
 
     def _run_timeseries(self):
-        cn = self.cb_cfg.currentText()
+        inputtext_config = self.config_combo.currentText()
         try:
-            cm = importlib.import_module(cn); importlib.reload(cm)
+            module_config = importlib.import_module(inputtext_config); importlib.reload(module_config)
         except Exception as e:
             self.status_label.setText(f"❌ Import: {e}"); return
-        if not hasattr(cm, 'config'):
-            self.status_label.setText(f"❌ {cn} has no 'config'"); return
+        if not hasattr(module_config, 'config'):
+            self.status_label.setText(f"❌ {inputtext_config} has no 'config'"); return
 
-        exp_config = cm.config
+        exp_config = module_config.config
         self._loaded_config = exp_config
-        self._loaded_config_name = cn
+        self._loaded_config_name = inputtext_config
         self._update_metadata_tree(exp_config)
 
-        instr = {'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task}
-
-        from timeseries_experiment import TimeseriesExperiment
+        instruments = {'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task}
 
         try:
-            self._ts_exp = TimeseriesExperiment(instr, exp_config)
+            self._ts_exp = TimeseriesExperiment(instruments, exp_config)
             self._ts_exp.setup()
         except Exception as e:
             self.status_label.setText(f"❌ TS setup: {e}")
-            print(traceback.format_exc()); return
+            printt(traceback.format_exc()); return
 
         # Switch plots to timeseries mode
         self.sweep_plot.clear()
+        self.sweep_plot.showAxis('right', False)
         self.sweep_plot.setTitle("Contrast Timeseries")
         self.sweep_plot.setLabel('bottom', 'Time', units='s')
-        self.sweep_plot.setLabel('left', 'Contrast')
+        self.sweep_plot.setLabel('left', 'Contrast', units='1')
         self._ts_contrast_curve = self.sweep_plot.plot(pen=_pen(0, 220, 1.5))
         self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1), clear=True)
 
@@ -2456,21 +2470,22 @@ class SessionManager(QMainWindow):
 
         self._set_running_state(True)
 
-        self.status_label.setText(
-            f"TS: {self._ts_exp.sequence} @ "
-            f"{self._ts_exp.scan_name}={self._ts_exp.fixed_value:.4g}")
+        self.status_label.setText(f"TS: {self._ts_exp.sequence} @ "
+                                  f"{self._ts_exp.scan_name}={self._ts_exp.fixed_value:.4g}")
 
     def _ts_refresh(self):
         """30 Hz display update for timeseries mode."""
         if not hasattr(self, '_ts_exp') or self._ts_exp is None:
             return
         exp = self._ts_exp
+        # assert exp.cfg.daq_ai
 
         # Contrast scrolling plot
         if exp.contrast_ring is not None:
             cdata = exp.contrast_ring.get_ordered()
             if len(cdata) > 0:
-                sample_rate = exp.cfg.daq_ai.ai_sample_rate
+                # TODO: correct time data
+                sample_rate = exp.cfg.daq_ai.sample_rate
                 contrast_rate = sample_rate / exp.chunk_samples
                 t = np.arange(-len(cdata), 0) / contrast_rate
                 self._ts_contrast_curve.setData(t, cdata)
@@ -2485,9 +2500,8 @@ class SessionManager(QMainWindow):
         # Status
         elapsed = time.perf_counter() - exp._start_time
         n_c = exp.contrast_ring.total_count if exp.contrast_ring else 0
-        self.status_label.setText(
-            f"TS: {elapsed:.1f}s | {n_c} contrast pts | "
-            f"{sum(len(c) for c in exp.full_chunks):,} raw samples")
+        self.status_label.setText(f"TS: {elapsed:.1f}s | {n_c} contrast pts | "
+                                  f"{sum(len(c) for c in exp.full_chunks):,} raw samples")
 
         # Check if auto-stopped
         if not exp.is_running and self.is_running:
@@ -2501,12 +2515,11 @@ class SessionManager(QMainWindow):
             self._ts_exp.stop()
             if self._ts_save_path:
                 fn = getattr(self, '_ts_fn', '001')
-                self._ts_exp.save(
-                    self._ts_save_path / f"ts_{fn}", fmt='npz')
+                self._ts_exp.save(self._ts_save_path, fn, fmt='npz')
             self._ts_exp.teardown()
 
         self._set_running_state(False)
-        self._is_camera_run = False
+        self.is_camera_run = False
         self.status_label.setText("✔ Timeseries done")
         self._push_namespace()
 
@@ -2514,17 +2527,17 @@ class SessionManager(QMainWindow):
 
     def _run_camera_timeseries(self):
         """Run PB-triggered continuous camera acquisition at a fixed point."""
-        cn = self.cb_cfg.currentText()
+        inputtext_config = self.config_combo.currentText()
         try:
-            cm = importlib.import_module(cn); importlib.reload(cm)
+            module_config = importlib.import_module(inputtext_config); importlib.reload(module_config)
         except Exception as e:
             self.status_label.setText(f"❌ Import: {e}"); return
-        if not hasattr(cm, 'config'):
-            self.status_label.setText(f"❌ {cn} has no 'config'"); return
+        if not hasattr(module_config, 'config'):
+            self.status_label.setText(f"❌ {inputtext_config} has no 'config'"); return
 
-        exp_config = cm.config
+        exp_config = module_config.config
         self._loaded_config = exp_config
-        self._loaded_config_name = cn
+        self._loaded_config_name = inputtext_config
         self._update_metadata_tree(exp_config)
 
         # Get camera worker
@@ -2532,29 +2545,31 @@ class SessionManager(QMainWindow):
         if cw is None:
             return
 
-        instr = {
-            'sg': self.sg, 'pb': self.pb, 'ao_task': self.ao_task,
-            'camera_worker': cw,
-        }
+        instruments = {'sg': self.sg, 'pb': self.pb,
+                       'ao_task': self.ao_task,
+                       'camera_worker': cw,
+                       }
 
         from camera_experiment import CameraTimeseriesExperiment
 
         try:
-            self._cam_ts_exp = CameraTimeseriesExperiment(instr, exp_config)
+            self._cam_ts_exp = CameraTimeseriesExperiment(instruments, exp_config)
             self._cam_ts_exp.setup()
         except Exception as e:
             self.status_label.setText(f"❌ CamTS setup: {e}")
-            print(traceback.format_exc()); return
+            printt(traceback.format_exc()); return
 
         # ── 3-panel layout: Image | Contrast + Intensity ─────────
         self._teardown_dynamic_plots()
-        plot_wg = self.sweep_plot.parent()
-        layout = plot_wg.layout()
+        
+        splitter: QSplitter = self.sweep_plot.parent()      # type: ignore
+
+        # Show diode plots    
         self.sweep_plot.hide()
         self.raw_plot.hide()
 
         # Top: Image panel
-        self._cam_plot = pg.PlotWidget(title="Camera Frame")
+        self._cam_plot = MPlotWidget(title="Camera Frame")
         self._cam_plot.setAspectLocked(True)
         self._cam_plot.invertY(True)
         self._cam_plot.hideAxis('bottom')
@@ -2565,25 +2580,25 @@ class SessionManager(QMainWindow):
             colorMap=pg.colormap.get('inferno'),
             interactive=False, width=15)
         self._cam_cbar.setImageItem(self._cam_image)
-        layout.addWidget(self._cam_plot, stretch=2)
+        splitter.addWidget(self._cam_plot)#, stretch=2)
 
         # Bottom row: Contrast scrolling | Intensity scrolling
         bottom_w = QWidget()
         bottom_l = QHBoxLayout(bottom_w)
         bottom_l.setContentsMargins(0, 0, 0, 0)
 
-        self._contrast_plot = pg.PlotWidget(title="Contrast Timeseries")
+        self._contrast_plot = MPlotWidget(title="Contrast Timeseries")
         self._contrast_plot.setLabel('bottom', 'Time', units='s')
-        self._contrast_plot.setLabel('left', 'S / R')
+        self._contrast_plot.setLabel('left', 'Contrast', units='1')
         self._contrast_plot.showGrid(x=True, y=True, alpha=0.3)
         self._contrast_curve = self._contrast_plot.plot(
             pen=_pen(2, 220, 1.5), name='S/R')
         bottom_l.addWidget(self._contrast_plot)
 
-        self._intensity_plot = pg.PlotWidget(title="Intensity Timeseries")
+        self._intensity_plot = MPlotWidget(title="Intensity Timeseries")
         self._intensity_plot.addLegend(offset=(10, 10))
         self._intensity_plot.setLabel('bottom', 'Time', units='s')
-        self._intensity_plot.setLabel('left', 'Pixel mean')
+        self._intensity_plot.setLabel('left', 'Pixel mean', units='1')
         self._intensity_plot.showGrid(x=True, y=True, alpha=0.3)
         self._intensity_sig = self._intensity_plot.plot(
             pen=_pen(0, 220, 1.5), name='Sig')
@@ -2591,7 +2606,8 @@ class SessionManager(QMainWindow):
             pen=_pen(1, 220, 1.5, dash=True), name='Ref')
         bottom_l.addWidget(self._intensity_plot)
 
-        layout.addWidget(bottom_w, stretch=1)
+        splitter.addWidget(bottom_w)#, stretch=1)
+        # splitter.setSizes([400, 200])         # TODO: Set initial sizes (pixels), 2:1 ratio initially
         self._cam_bottom_widget = bottom_w
 
         # 30 Hz display refresh
@@ -2611,7 +2627,7 @@ class SessionManager(QMainWindow):
         if not hasattr(self._cam_ts_exp, '_auto_stop_time'):
             self._cam_ts_exp._auto_stop_time = None
         self._cam_ts_exp.start()
-        self._is_camera_run = True
+        self.is_camera_run = True
 
         # Session-side auto-stop timer (works for both diode and camera TS)
         dur = self._get_ts_duration()
@@ -2622,10 +2638,8 @@ class SessionManager(QMainWindow):
             self._ts_auto_stop.start(int(dur * 1000))
 
         self._set_running_state(True)
-        self.status_label.setText(
-            f"CamTS: {self._cam_ts_exp.sequence} @ "
-            f"{self._cam_ts_exp.scan_name}="
-            f"{self._cam_ts_exp.fixed_value:.4g}")
+        self.status_label.setText(f"CamTS: {self._cam_ts_exp.sequence} @ {self._cam_ts_exp.scan_name}="
+                                  f"{self._cam_ts_exp.fixed_value:.4g}")
 
     def _cam_ts_refresh(self):
         """30 Hz display update for camera timeseries — all 3 panels."""
@@ -2646,6 +2660,7 @@ class SessionManager(QMainWindow):
                 self._contrast_curve.setData(t, cdata)
 
         # ── Intensity scrolling (sig + ref) ──
+        # assert exp.ref_ring
         if (exp.sig_ring is not None
                 and self._intensity_sig is not None):
             sdata = exp.sig_ring.get_ordered()
@@ -2660,9 +2675,7 @@ class SessionManager(QMainWindow):
         # ── Status ──
         elapsed = time.perf_counter() - exp._start_time
         n_c = exp.contrast_ring.total_count if exp.contrast_ring else 0
-        self.status_label.setText(
-            f"CamTS: {elapsed:.1f}s | {n_c} contrast pts | "
-            f"{exp.cycle_count} cycles")
+        self.status_label.setText(f"CamTS: {elapsed:.1f}s | {n_c} contrast pts | {exp.cycle_count} cycles")
 
         # Check if auto-stopped
         if not exp.is_running and self.is_running:
@@ -2679,14 +2692,13 @@ class SessionManager(QMainWindow):
             self._ts_auto_stop = None
         if hasattr(self, '_cam_ts_exp') and self._cam_ts_exp is not None:
             self._cam_ts_exp.stop()
-            if getattr(self, '_cam_ts_save_path', None):
+            if self._cam_ts_save_path:
                 fn = getattr(self, '_cam_ts_fn', '001')
-                self._cam_ts_exp.save(
-                    self._cam_ts_save_path / f"cam_ts_{fn}")
+                self._cam_ts_exp.save(self._cam_ts_save_path / f"cam_ts_{fn}")
             self._cam_ts_exp.teardown()
 
         self._set_running_state(False)
-        self._is_camera_run = False
+        self.is_camera_run = False
         self.status_label.setText("✔ Camera timeseries done")
         self._push_namespace()
 
@@ -2694,24 +2706,19 @@ class SessionManager(QMainWindow):
     #  VIEW SEQUENCE (PB only)
     # ════════════════════════════════════════════════════════════════
 
-    def _view_sequence(self):   # TODO: should not require PB - this is just plot
-        if not self._pb_ready:
-            self.status_label.setText("❌ PB not initialized"); return
+    def _plot_sequence(self):
+        self._load_config()
         cfg = self._ensure_config()
-        if cfg is None: return
 
-        instr = {'sg':self.sg,'pb':self.pb,'ao_task':self.ao_task}
+        instruments = {'sg':self.sg,'pb':self.pb,'ao_task':self.ao_task}
         from experiment_base import DiodeExperiment
-        import matplotlib.pyplot as plt
         try:
-            exp = DiodeExperiment(instr, cfg)
-            print("After experiment init...")
+            exp = DiodeExperiment(instruments, cfg)
             idx = getattr(cfg.runtime,'seq_plot_indices',[0,-1])
             exp.view_sequences(indices=idx, dpi=100)
-            plt.show()
             self.status_label.setText("✔ Sequence plotted")
         except Exception as e:
-            self.status_label.setText(f"❌ View: {e}"); print(traceback.format_exc())
+            self.status_label.setText(f"❌ View: {e}"); printt(traceback.format_exc())
 
     # ════════════════════════════════════════════════════════════════
     #  PLAY SEQUENCE (PB only)
@@ -2720,37 +2727,19 @@ class SessionManager(QMainWindow):
     def _play_sequence(self):
         """Program + start PB at last seq_plot_indices value."""
         if not self._pb_ready:
-            self.status_label.setText("❌ PB not initialized"); return
+            self._init_pb()
         cfg = self._ensure_config()
         if cfg is None: return
 
         try:
-            args_names = cfg.seq.args_names
-            seq_args = list(cfg.seq.args_values)
-            sn = cfg.scan_names[0] if cfg.scan_names else ''
-            plot_wg_sub = cfg.scans[sn].values if sn else np.array([0])
-
-            indices = getattr(cfg.runtime,'seq_plot_indices',[0,-1])
-            pi = indices[-1]
-            if pi < 0: pi = len(plot_wg_sub) + pi
-            val = plot_wg_sub[pi]
-
-            is_freq = cfg.seq.name in (
-                'esr_dig_mod_seq','esr_seq','pesr_seq','modesr','drift_seq')
-            if is_freq:
-                sal = seq_args
-            elif sn in args_names:
-                sal = list(seq_args); sal[args_names.index(sn)] = val
-            else:
-                sal = [val] + seq_args
-
-            _, the_list = PulseBlaster.PB_program(
-                'diode', cfg.seq.name, sal + [cfg.pb.channels])
-            self.pb.run_sequence_for_diode(
-                [the_list[i][0] for i in range(len(the_list))])
-            self.status_label.setText(f"▶ PB: {cfg.seq.name} @ {sn}={val:.4g}")
+            instruments = {'sg':self.sg,'pb':self.pb,'ao_task':self.ao_task}
+            from experiment_base import DiodeExperiment
+            exp = DiodeExperiment(instruments, cfg)
+            name, sn, val = exp.play_sequence(indices=[-1])
+            self.status_label.setText(f"▶ PB: {name} @ {sn}={val:.4g}")
+            self.btn_stop_seq.setEnabled(True)
         except Exception as e:
-            self.status_label.setText(f"❌ Play: {e}"); print(traceback.format_exc())
+            self.status_label.setText(f"❌ Play: {e}"); printt(traceback.format_exc())
 
     def _stop_sequence(self):
         if not self._pb_ready:
@@ -2759,84 +2748,119 @@ class SessionManager(QMainWindow):
         if cfg is None: return
 
         try:
+            assert self.pb is not None
             self.pb.stop_sequence()
+            self.btn_stop_seq.setEnabled(False)
             self.status_label.setText(f"🛑 PB")
         except Exception as e:
-            self.status_label.setText(f"❌ Stop: {e}"); print(traceback.format_exc())
+            self.status_label.setText(f"❌ Stop: {e}"); printt(traceback.format_exc())
 
     # ── real-time plot (main thread) ────────────────────────────────────
 
     @Slot(int, float, int, int, str, object, object)
-    def _on_plot(self, inner_idx, val, i_run, oc_idx, oc_str, proc, raw):
+    def _on_plot(self, inner_idx: int, val, i_run: int, oc_idx: int, oc_str: str,
+                 proc: np.ndarray, raw: np.ndarray|list[float]):
+        """Slot cnnection for real time plot.
+        
+        Parameters
+        ----------
+        inner_idx: int
+            Inner loop/parameter index for status bar label and legend
+        val : float
+            Inner loop/parameter value xxxx
+        i_run : int
+            Run index for status bar label and legend
+        oc_idx : int
+            Outer loop/parameter indices for status bar label and legend
+        oc_str : str
+            Outer loop/parameter string combined
+        proc : Array-like
+            Processed array for contrast plot
+        raw : Array-like
+            Raw data for lower panel
+        """
         if getattr(self, '_is_camera_run', False):
-            self._on_camera_plot(inner_idx, val, i_run, oc_idx, oc_str,
-                                 proc, raw)
+            self._on_camera_plot(inner_idx, i_run, oc_idx, oc_str, proc, raw)
             return
 
-        self.status_label.setText(
-            f"Outer {oc_idx+1}  Run {i_run+1}/{self._Nruns}  "
-            f"Pt {inner_idx+1}/{len(self._inner_vals)}"
-            f"{'  '+oc_str if oc_str else ''}")
+        self.status_label.setText(f"Outer {oc_idx+1}  Run {i_run+1}/{self.Nruns}  "
+                                  f"Pt {inner_idx+1}/{len(self.inner_vals)}"
+                                  f"{'  '+oc_str if oc_str else ''}")
 
-        if not self.chk_rt.isChecked():
-            return
+        if self.chk_rt.isChecked():
+            # Curve key: unique per (outer_combo, run, data_type)
+            alpha = 100 if self.Nruns > 1 else 220
+            color_base = oc_idx * 2  # offset colors per outer combo
+            # TODO: generalize this - for single (esp counter) / bulk (esp analog) readouts
+            if proc is not None and len(proc) >= 1:
+                ms = proc[0]; n = ms.shape[0]
+                mr = proc[1]; n2 = mr.shape[0]
+                # assert n == n2
 
-        # Curve key: unique per (outer_combo, run, data_type)
-        alpha = 100 if self._Nruns > 1 else 220
-        color_base = oc_idx * 2  # offset colors per outer combo
+                # For shuffled data: the processed data is a slice of whatever points have been filled so far.  We need to plot at the  correct x positions.  The callback sends inner_idx (actual position in the values array), so we can build scatter-style.
+                # However, process_data returns contiguous means for filled pts. Simplest correct approach: plot sig for all filled inner points.
 
-        if proc is not None and len(proc) >= 1:
-            ms = proc[0]
-            n = ms.shape[0]
+                # Get the full data slice for this (outer, run) from the experiment's perspective.  Since we're in the GUI thread and the experiment thread is blocked on DAQ I/O, accessing the shared data_array is safe here (GIL).
 
-            # For shuffled data: the processed data is a slice of whatever
-            # points have been filled so far.  We need to plot at the
-            # correct x positions.  The callback sends inner_idx (actual
-            # position in the values array), so we can build scatter-style.
-            # However, process_data returns contiguous means for filled pts.
-            # Simplest correct approach: plot sig for all filled inner points.
+                key_sig = f"S_o{oc_idx}_r{i_run}"
+                if key_sig not in self.curves:
+                    self.curves[key_sig] = (self.sweep_plot.plot(
+                        pen=_pen(color_base, alpha, width=1.2, dash=False),
+                        name=key_sig, symbol='o', symbolSize=2,
+                        symbolPen=_pen(color_base, alpha, width=1.2, dash=False),
+                        symbolBrush=pg.mkBrush(color=_PAL[color_base % len(_PAL)])), color_base)
+                
+                key_ref = f"R_o{oc_idx}_r{i_run}"
+                if key_ref not in self.curves:
+                    self.curves[key_ref] = (self.sweep_plot.plot(
+                        pen=_pen(color_base, alpha, width=1.2, dash=True),
+                        name=key_ref, symbol='o', symbolSize=2,
+                        symbolPen=_pen(color_base, alpha, width=1.2, dash=True),
+                        symbolBrush=pg.mkBrush(color=_PAL[color_base % len(_PAL)])), color_base)
 
-            # Get the full data slice for this (outer, run) from the
-            # experiment's perspective.  Since we're in the GUI thread and
-            # the experiment thread is blocked on DAQ I/O, accessing the
-            # shared data_array is safe here (GIL).
+                # x-coords for filled points: we use inner_values directly since data_array is indexed by actual inner position
+                xs_all = self.inner_vals
+                # Plot whatever points are nonzero in this run's data.. This handles shuffled order naturally
+                self.curves[key_sig][0].setData(xs_all[:n], ms[:n])
+                self.curves[key_ref][0].setData(xs_all[:n2], mr[:n2])
 
-            key_sig = f"sig_o{oc_idx}_r{i_run}"
-            if key_sig not in self._curves:
-                name = f"S o{oc_idx}" if i_run == 0 else None
-                self._curves[key_sig] = self.sweep_plot.plot(
-                    pen=_pen(color_base, alpha, 1.5),
-                    name=name, symbol='o', symbolSize=4,
-                    symbolBrush=pg.mkColor(
-                        _PAL[color_base % len(_PAL)]))
+                # Contrast on right y-axis
+                if len(proc) >= 3 and self.contrast_vb is not None:
+                    contrast_vals = self._compute_display_contrast(ms[:n], mr[:n2])
 
-            # x-coords for filled points: we use inner_values directly
-            # since data_array is indexed by actual inner position
-            xs_all = self._inner_vals / self._xu
-            # Plot whatever points are nonzero in this run's data
-            # This handles shuffled order naturally
-            self._curves[key_sig].setData(xs_all[:n], ms[:n, 0])
+                    key_con = f"C_o{oc_idx}_r{i_run}"
+                    if key_con not in self.curves:
+                        crv = pg.PlotDataItem(
+                            pen=_pen(color_base+1, alpha, width=3, dash=False),
+                            name=key_con, symbol='o', symbolSize=4,
+                            symbolPen=_pen(color_base+1, alpha, width=3, dash=False),
+                            symbolBrush=pg.mkBrush(color=_PAL[color_base+1 % len(_PAL)]))
+                        self.contrast_vb.addItem(crv)
+                        self.contrast_vb_legend.addItem(crv, name=key_con)
+                        self.curves[key_con] = (crv, color_base+1)
+                    self.curves[key_con][0].setData(xs_all[:n], contrast_vals)
+                    self.contrast_vb.autoRange()
 
-            # Contrast on right y-axis
-            if len(proc) >= 3 and getattr(self, '_contrast_vb', None) is not None:
-                contrast_vals = self._compute_display_contrast(
-                    proc[0][:n, 0], proc[1][:n, 0])
-                key_con = f"con_o{oc_idx}_r{i_run}"
-                if key_con not in self._curves:
-                    nm = f"C o{oc_idx}" if i_run==0 else None
-                    crv = pg.PlotDataItem(
-                        pen=_pen(color_base + 1, alpha, 1.5, dash=True),
-                        name=nm)
-                    self._contrast_vb.addItem(crv)
-                    self._curves[key_con] = crv
-                self._curves[key_con].setData(xs_all[:n], contrast_vals)
-                self._contrast_vb.autoRange()
-        # Raw
-        if raw is not None:
+                    # Reduce the linewidths of all the previous lines except the active one...
+                    for name, curve in self.curves.items():
+                        if 'C_' in name and (not name==key_con):
+                            curve[0].setPen(_pen(curve[-1], alpha, width=1, dash=False))
+                            curve[0].setSymbolSize(2)
+                            curve[0].setSymbolPen(_pen(curve[-1], alpha, width=2, dash=False))
+                            curve[0].setSymbolBrush(
+                                pg.mkBrush(
+                                color=(*pg.mkColor(_PAL[curve[-1] % len(_PAL)]).getRgb()[:3],   # type: ignore
+                                       alpha)))
+        
+        # Raw data
+        if raw is not None and self.chk_raw_rt.isChecked():
             self.raw_curve.setData(np.ravel(np.array(raw)))
+        
+        # TODO: Possible to introduce something to enable/disable groups of legends: Signal grp, Reference grp and Contrast grp?
+        # TODO: Possibility: Existing: Single plot: Signal+Reference on left and Contrast on right -> Signal+Reference || Contrast on separate plots - either sideways or top/bottom?
 
     @Slot(object, object)
-    def _on_done(self, exp, data):
+    def _on_exp_done(self, exp, data):
         self.last_exp = exp
         self._set_running_state(False)
         sh = " × ".join(str(s) for s in data.shape)
@@ -2844,19 +2868,22 @@ class SessionManager(QMainWindow):
 
         # Restore diode plot layout if camera was used
         if getattr(self, '_is_camera_run', False):
-            self._is_camera_run = False
+            self.is_camera_run = False
         self._push_namespace()
         self._clear_comment_field()
-        # Enable manual data save pushbutton
-        self.save_data_manually.setEnabled(not self.chk_autosave.isChecked())
-    
+        self.save_data_manually.setEnabled(not self.chk_autosave.isChecked())       # Enable manual data save pushbutton if autosave is disabled
+        self.spin_autosave_num.setValue(self.spin_autosave_num.value()+1) \
+            if not self.save_data_manually.isEnabled() else None                    # Increase autosave number if manual save is disabled
+        
+        # TODO: Decide what to do after each experiment wrt LASER and MW - maybe use checkboxes and keep enabled / disabled after acquisition
+
     @Slot(str)
     def _on_err(self, tb):
         self._set_running_state(False)
         self.status_label.setText("❌ Error (see console)")
-        print(tb)
+        printt(tb)
         if getattr(self, '_is_camera_run', False):
-            self._is_camera_run = False
+            self.is_camera_run = False
 
     def _stop_experiment(self):
         if self.cb_mode.currentText() == 'Timeseries':
@@ -2875,8 +2902,7 @@ class SessionManager(QMainWindow):
 
     def _is_camera_config(self, config) -> bool:
         """Detect if config is for a camera experiment."""
-        return (hasattr(config, 'camera')
-                and config._is_active('camera'))
+        return (hasattr(config, 'camera') and config._is_active('camera'))
 
     def _get_or_create_camera_worker(self, config):
         """Get or create a CameraWorker for camera experiments.
@@ -2904,7 +2930,7 @@ class SessionManager(QMainWindow):
                     QApplication.processEvents()
                     time.sleep(0.5)  # DCAM cleanup
             except Exception as e:
-                print(f"⚠ Viewer close: {e}")
+                printt(f"⚠ Viewer close: {e}")
             self._camera_viewer = None
 
         # Check if we already have a camera worker from a previous run
@@ -2920,7 +2946,7 @@ class SessionManager(QMainWindow):
         try:
             from Camcontrol import CameraWorker
             cw = CameraWorker(
-                simulate=self.chk_sim.isChecked(),
+                simulate=self.simulate_checkboxes['CAM'].isChecked(),
                 roi=config.camera.roi,
                 exposure=config.camera.exposure_s,
             )
@@ -2931,7 +2957,7 @@ class SessionManager(QMainWindow):
             return cw
         except Exception as e:
             self.status_label.setText(f"❌ Camera init: {e}")
-            print(traceback.format_exc())
+            printt(traceback.format_exc())
             return None
 
     def _setup_camera_plots(self, config):
@@ -2948,15 +2974,14 @@ class SessionManager(QMainWindow):
         # ── Tear down any previous camera or diode panels ────────
         self._teardown_dynamic_plots()
 
-        plot_wg = self.sweep_plot.parent()
-        layout = plot_wg.layout()
-
+        splitter: QSplitter = self.sweep_plot.parent()      # type: ignore
+        
         # Hide default diode plots (stay parented but hidden)
         self.sweep_plot.hide()
         self.raw_plot.hide()
 
         # ── Image panel ──────────────────────────────────────────
-        self._cam_plot = pg.PlotWidget(title="Camera Frame")
+        self._cam_plot = MPlotWidget(title="Camera Frame")
         self._cam_plot.setAspectLocked(True)
         self._cam_plot.invertY(True)
         self._cam_plot.hideAxis('bottom')
@@ -2983,13 +3008,14 @@ class SessionManager(QMainWindow):
             interactive=False, width=15)
         self._cam_cbar.setImageItem(self._cam_image)
 
-        layout.addWidget(self._cam_plot, stretch=2)
+        # if splitter and splitter.indexOf(self._cam_plot) < 0:
+        splitter.addWidget(self._cam_plot)#, stretch=2)
 
         # ── Sweep plot (intensity left axis, contrast right axis) ──
-        self._intensity_plot = pg.PlotWidget(title="Sweep")
-        self._intensity_plot.addLegend(offset=(10, 10))
-        self._intensity_plot.setLabel('bottom', config.plot.x_label)
-        self._intensity_plot.setLabel('left', 'Intensity')
+        self._intensity_plot = MPlotWidget(title="Sweep")
+        # self._intensity_plot.addLegend(offset=(10, 10))
+        self._intensity_plot.setLabel('bottom', config.plot.x_label, units=config.plot.x_label_units)
+        self._intensity_plot.setLabel('left', 'Intensity', units='1')
         self._intensity_plot.showGrid(x=True, y=True, alpha=0.3)
         # No initial curves — callback creates per-run curves via _curves dict
 
@@ -2999,23 +3025,24 @@ class SessionManager(QMainWindow):
         self._intensity_plot.getAxis('right').linkToView(self._cam_contrast_vb)
         self._cam_contrast_vb.setXLink(self._intensity_plot)
         self._intensity_plot.showAxis('right')
-        self._intensity_plot.setLabel('right', 'Contrast')
+        self._intensity_plot.setLabel('right', 'Contrast', units='1')
 
         def _sync_cam_vb():
-            self._cam_contrast_vb.setGeometry(
+            # assert self._cam_contrast_vb is not None
+            self._cam_contrast_vb.setGeometry(      # type: ignore
                 self._intensity_plot.getViewBox().sceneBoundingRect())
         self._intensity_plot.getViewBox().sigResized.connect(_sync_cam_vb)
 
-        self._curves.clear()  # fresh per experiment
+        self.curves.clear()  # fresh per experiment
 
-        layout.addWidget(self._intensity_plot, stretch=2)
+        splitter.addWidget(self._intensity_plot)#, stretch=2)
 
         # ── Raw trace (bottom) ───────────────────────────────────
-        self._cam_raw_plot = pg.PlotWidget(title="Raw Trace")
-        self._cam_raw_plot.setLabel('bottom', 'Pixel')
+        self._cam_raw_plot = MPlotWidget(title="Raw Trace")
+        self._cam_raw_plot.setLabel('bottom', 'Pixel', units='1')
         self._cam_raw_plot.showGrid(x=True, y=True, alpha=0.3)
         self._cam_raw_curve = self._cam_raw_plot.plot(pen=_pen(3, width=1))
-        layout.addWidget(self._cam_raw_plot, stretch=1)
+        splitter.addWidget(self._cam_raw_plot)#, stretch=1)
 
         # Bundle the sweep+raw into a container for teardown
         self._cam_bottom_widget = QWidget()  # placeholder for teardown
@@ -3027,30 +3054,27 @@ class SessionManager(QMainWindow):
 
         Called before setting up a new plot layout to prevent stacking.
         """
-        plot_wg = self.sweep_plot.parent()
-        layout = plot_wg.layout()
+        splitter = self.sweep_plot.parent()
 
         # Remove camera extra plots (intensity sweep plot + raw trace)
         for w in getattr(self, '_cam_extra_plots', []):
-            if w is not None:
-                layout.removeWidget(w)
+            if w is not None and splitter is not None:
                 w.setParent(None)
                 w.deleteLater()
         self._cam_extra_plots = []
 
         for attr in ('_cam_plot', '_cam_bottom_widget'):
             w = getattr(self, attr, None)
-            if w is not None:
-                layout.removeWidget(w)
+            if w is not None and splitter is not None:
                 w.setParent(None)
                 w.deleteLater()
                 setattr(self, attr, None)
 
         # Clean up right-axis contrast ViewBox (diode dual-axis sweep plot)
-        vb = getattr(self, '_contrast_vb', None)
+        vb = getattr(self, 'contrast_vb', None)
         if vb is not None:
             self.sweep_plot.scene().removeItem(vb)
-            self._contrast_vb = None
+            self.contrast_vb = None
             self.sweep_plot.hideAxis('right')
 
         # Clean up camera contrast ViewBox
@@ -3074,41 +3098,46 @@ class SessionManager(QMainWindow):
         """
         self._teardown_dynamic_plots()
 
-        plot_wg = self.sweep_plot.parent()
-        layout = plot_wg.layout()
+        splitter: QSplitter = self.sweep_plot.parent()      # type: ignore
 
         # Show diode plots
         self.sweep_plot.show()
         self.raw_plot.show()
-        if layout.indexOf(self.sweep_plot) < 0:
-            layout.addWidget(self.sweep_plot, stretch=2)
-        if layout.indexOf(self.raw_plot) < 0:
-            layout.addWidget(self.raw_plot, stretch=1)
+        if splitter and splitter.indexOf(self.sweep_plot) < 0:
+            splitter.addWidget(self.sweep_plot)#, stretch=2)
+        if splitter and splitter.indexOf(self.raw_plot) < 0:
+            splitter.addWidget(self.raw_plot)#, stretch=1)
 
         # Reset sweep plot
         self.sweep_plot.clear()
         self.sweep_plot.addLegend(offset=(10, 10))
-        self.sweep_plot.setLabel('bottom', config.plot.x_label)
-        self.sweep_plot.setLabel('left', 'Signal')
+        self.sweep_plot.setLabel('bottom', config.plot.x_label, units=config.plot.x_label_units)
+        self.sweep_plot.setLabel(axis='left', text='Signal', units='1')
 
         # Right y-axis for contrast
-        self._contrast_vb = pg.ViewBox()
-        self.sweep_plot.scene().addItem(self._contrast_vb)
-        self.sweep_plot.getAxis('right').linkToView(self._contrast_vb)
-        self._contrast_vb.setXLink(self.sweep_plot)
+        self.contrast_vb = pg.ViewBox()
+        self.sweep_plot.scene().addItem(self.contrast_vb)
+        self.sweep_plot.getAxis('right').linkToView(self.contrast_vb)
+        self.sweep_plot.getAxis('left').setGrid(False)
+        self.sweep_plot.getAxis('right').setGrid(0.3)
+        self.contrast_vb.setXLink(self.sweep_plot)
         self.sweep_plot.showAxis('right')
-        self.sweep_plot.setLabel('right', 'Contrast')
+        self.sweep_plot.setLabel('right', 'Contrast', units='1')
+        # # Manually create and position the Right Legend
+        self.contrast_vb_legend = pg.LegendItem(offset=(-10, 10)) # Offset from top-right
+        self.contrast_vb_legend.setParentItem(self.contrast_vb)              # Bind to the visual plot area
 
         # Keep right axis in sync on resize
         def _update_contrast_vb():
-            self._contrast_vb.setGeometry(
+            # assert self.contrast_vb is not None
+            self.contrast_vb.setGeometry(       # type: ignore
                 self.sweep_plot.getViewBox().sceneBoundingRect())
         self.sweep_plot.getViewBox().sigResized.connect(_update_contrast_vb)
 
         self.raw_curve = self.raw_plot.plot(pen=_pen(3, width=1), clear=True)
-        self._curves.clear()
+        self.curves.clear()
 
-    def _on_camera_plot(self, inner_idx, val, i_run, oc_idx, oc_str,
+    def _on_camera_plot(self, inner_idx, i_run, oc_idx, oc_str,
                         processed, frame):
         """Handle camera experiment callback — update 3 panels.
 
@@ -3125,12 +3154,12 @@ class SessionManager(QMainWindow):
 
         if is_focus:
             self.status_label.setText(
-                f"🔍 Focus  Run {i_run+1}/{self._Nruns}  "
+                f"🔍 Focus  Run {i_run+1}/{self.Nruns}  "
                 f"{'  '+oc_str if oc_str else ''}")
         else:
             self.status_label.setText(
-                f"Outer {oc_idx+1}  Run {i_run+1}/{self._Nruns}  "
-                f"Pt {inner_idx+1}/{len(self._inner_vals)}"
+                f"Outer {oc_idx+1}  Run {i_run+1}/{self.Nruns}  "
+                f"Pt {inner_idx+1}/{len(self.inner_vals)}"
                 f"{'  '+oc_str if oc_str else ''}")
 
         if not self.chk_rt.isChecked():
@@ -3147,12 +3176,11 @@ class SessionManager(QMainWindow):
         if not is_focus and processed is not None:
             mean_sig, mean_ref, contrast = processed
             n = len(mean_sig)
-            xs = self._inner_vals[:n] / self._xu
+            xs = self.inner_vals[:n]
 
-            display_contrast = self._compute_display_contrast(
-                mean_sig, mean_ref)
+            display_contrast = self._compute_display_contrast(mean_sig, mean_ref)
 
-            alpha = 80 if self._Nruns > 1 else 220
+            alpha = 80 if self.Nruns > 1 else 220
             iplot = getattr(self, '_intensity_plot', None)
             cvb = getattr(self, '_cam_contrast_vb', None)
             if iplot is None:
@@ -3160,39 +3188,36 @@ class SessionManager(QMainWindow):
 
             # ── Signal curve (left axis) ──
             k_sig = f"cam_sig_o{oc_idx}_r{i_run}"
-            if k_sig not in self._curves:
-                self._curves[k_sig] = iplot.plot(
-                    pen=_pen(0, alpha, 1.5),
-                    name=f"S o{oc_idx}" if i_run == 0 else None)
-            self._curves[k_sig].setData(xs, mean_sig)
+            if k_sig not in self.curves:
+                self.curves[k_sig] = iplot.plot(pen=_pen(0, alpha, 1.5),
+                                                 name=f"S o{oc_idx}_r{i_run}")
+            self.curves[k_sig][0].setData(xs, mean_sig)
 
             # ── Reference curve (left axis, dashed) ──
             k_ref = f"cam_ref_o{oc_idx}_r{i_run}"
-            if k_ref not in self._curves:
-                self._curves[k_ref] = iplot.plot(
-                    pen=_pen(1, alpha, 1.5, dash=True),
-                    name=f"R o{oc_idx}" if i_run == 0 else None)
-            self._curves[k_ref].setData(xs, mean_ref)
+            if k_ref not in self.curves:
+                self.curves[k_ref] = iplot.plot(pen=_pen(1, alpha, 1.5, dash=True),
+                                                 name=f"R o{oc_idx}_r{i_run}")
+            self.curves[k_ref][0].setData(xs, mean_ref)
 
             # ── Contrast curve (right axis) ──
             if cvb is not None:
                 k_con = f"cam_con_o{oc_idx}_r{i_run}"
-                if k_con not in self._curves:
+                if k_con not in self.curves:
                     crv = pg.PlotDataItem(
                         pen=_pen(2, alpha, 1.5, dash=True),
-                        name=f"C o{oc_idx}" if i_run == 0 else None)
+                        name=f"C o{oc_idx}_r{i_run}")
                     cvb.addItem(crv)
-                    self._curves[k_con] = crv
-                self._curves[k_con].setData(xs, display_contrast)
+                    self.curves[k_con] = (crv, 0)
+                self.curves[k_con][0].setData(xs, display_contrast)
                 cvb.autoRange()
 
-    def closeEvent(self, ev):
+    def closeEvent(self, event):
         self._save_session_state()
-        print(self.last_used_configs)
         if self.is_running:
             r = QMessageBox.question(self, "Running", "Stop and quit?",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if r == QMessageBox.StandardButton.No: ev.ignore(); return
+            if r == QMessageBox.StandardButton.No: event.ignore(); return
             # Stop whatever is running
             if hasattr(self, '_ts_exp') and self._ts_exp and self._ts_exp.is_running:
                 self._ts_stop()
@@ -3217,7 +3242,7 @@ class SessionManager(QMainWindow):
                 self._camera_worker = None
 
             # Terminate HCImageLive if running
-            if self._hci_process is not None and self._hci_process.poll() is None:
+            if self._hci_process is not None:
                 self._hci_process.terminate()
                 self._hci_process = None
             if self._hci_watcher is not None:
@@ -3238,8 +3263,8 @@ class SessionManager(QMainWindow):
                 except Exception:
                     pass
         except Exception as e:
-            print(f"Cleanup: {e}")
-        ev.accept()
+            printt(f"Cleanup: {e}")
+        event.accept()
 
 def set_dark_theme(app):
     """Set application-wide dark theme"""
@@ -3274,7 +3299,7 @@ def main():
     win = SessionManager()
     app_icon = QIcon(DEFAULT_EXPERIMENT_DIRECTORY + r"\session_manager_icon.png")
     win.setWindowIcon(app_icon)
-    app.setWindowIcon(app_icon) # Sets it for the whole application
+    app.setWindowIcon(app_icon)     # type: ignore # Sets it for the whole application
     win.show()
     sys.exit(app.exec())
 

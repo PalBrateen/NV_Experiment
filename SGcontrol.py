@@ -1,14 +1,17 @@
 # self._instrcontrol
 #%%
 import pyvisa as visa, sys, time, logging
-from typing import Union, List, Tuple, Optional
-from connectionConfig import sg_addr
+from typing import Union, List, Tuple
 from enum import IntEnum
+from experiment_config import SG_ADDR
 # Frequency unit multiplier definitions
 Hz = 1
 kHz = 1e3
 MHz = 1e6
 GHz = 1e9
+
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 class ModulationType(IntEnum):
     NONE = -1
@@ -169,9 +172,9 @@ class SignalGenerator():
         self.mod_rate: float# = 1e3
         self.mod_dev: float# = 0.0
 
-        self.init(sg_addr) if auto_init_hardware else None
+        self.init(SG_ADDR) if auto_init_hardware else None
     
-    def init(self, addr):
+    def init(self, addr=SG_ADDR):
         """
         Opens a RS-232 communication channel with the self._instr.
         It also clears the Standard Event Status Register (ESR) and Instrument Status Register (INSR) registers as well as the Last Error (LERR) error buffer.
@@ -179,25 +182,25 @@ class SignalGenerator():
         Returns
         -------
         """
-        searched = False
+        found = False
         rm = visa.ResourceManager()             # Instantiate a resource manager; rm = object of type ResourceManager
-        print("Searching SG384...")
-        while not searched:
+        printt("Searching SG384...")
+        while not found:
             for ad in addr:
                 try:
                     res = rm.open_resource(ad)
                     if self.modelname not in res.query('*IDN?'):
-                        print('❌ Error: could not query SG... Retrying')
+                        printt('❌ Error: could not query SG... Retrying')
                     else:
                         self.addr = ad
-                        searched = True
+                        found = True
                         self._instr = rm.open_resource(self.addr)
                         break
                 except:
                     pass
             time.sleep(1)
-        self._instr_status = 'Connected' if searched else 'Not connected'
-        print(f"✔\x1b[38;2;250;250;0m SG384 Init via {self.addr}!\x1b[0m")
+        self._instr_status = 'Connected' if found else 'Not connected'
+        printt(f"✔\x1b[38;2;250;250;0m SG384 Init via {self.addr}!\x1b[0m")
         self._instr.write('*CLS')
         self.set_display(self.display)
         # self.enable_ntype(1)
@@ -217,7 +220,7 @@ class SignalGenerator():
     def _check_err(self):
         res = self._instr.query('LERR?')
         if int(res) != 0:
-            print(f'❌\x1b[38;2;0;100;250m SG error:: Code {int(res)}: {ErrorCodes.get_description(int(res))}\x1b[0m')
+            printt(f'❌\x1b[38;2;0;100;250m SG error:: Code {int(res)}: {ErrorCodes.get_description(int(res))}\x1b[0m')
             # sys.exit()
             self._instr_status = 'Error'
     
@@ -245,6 +248,9 @@ class SignalGenerator():
                     self.mod_dev = float(self.query('FDEV?'))
                 elif self.mod_type == 'AMPLITUDE':
                     self.mod_dev = float(self.query('ADEP?'))
+                elif self.mod_type == 'PULSE':
+                    self.mod_dev = float(self.query('ADEP?'))   # TODO: correct this
+
         except Exception as e:
             logging.exception(f"❌ Error querying SG parameters: {e}")
             pass
@@ -264,9 +270,9 @@ class SignalGenerator():
 
         self.status_ntype = int(self.query(f'{cmd}?'))
         if self.status_ntype:
-            print("N-type enabled...")
+            print("N-type ON...")
         else:
-            print("N-type disabled...")
+            print("N-type OFF...")
 
     def enable_bnc(self, enable:Union[bool, int]=True):
         cmd = 'ENBL'
@@ -274,9 +280,9 @@ class SignalGenerator():
 
         self.status_bnc = int(self.query(f'{cmd}?'))
         if self.status_bnc:
-            print("BNC enabled...")
+            print("BNC ON...")
         else:
-            print("BNC disabled...")
+            print("BNC OFF...")
         
     def set_amp_rf(self, amp:float, units:str='dBm'):
         cmd = 'AMPR'
@@ -297,7 +303,7 @@ class SignalGenerator():
         self.write(f'{cmd} {str(freq)}{unit}')
         # 
         self.freq = freq
-        # print(self.freq)
+        # printt(self.freq)
     
     def enable_modulation(self, enable:Union[bool, int]=True):
         cmd = 'MODL'
@@ -315,6 +321,7 @@ class SignalGenerator():
         self.mod_type = ModulationType(int(self.query(f'{cmd}?'))).name
 
     def set_mod_func(self, fm_func:str):
+        cmd = None
         if self.mod_type in ['AMPLITUDE', 'FREQUENCY', 'PHASE']:
             cmd = 'MFNC'
             # if isinstance(fm_func, ModulationType) or isinstance(fm_func, str):
@@ -339,7 +346,7 @@ class SignalGenerator():
             self.write(f'{cmd} {ModulationFunction[str(fm_func).upper()].value}')
             # elif isinstance(fm_func, int):
             #     self.write(f'QFNC {str(fm_func)}')
-        
+        assert cmd
         self.mod_func = ModulationFunction(int(self.query(f'{cmd}?'))).name
 
     def set_mod_rate(self, mod_rate:float=1e3):
@@ -351,6 +358,7 @@ class SignalGenerator():
     set_mod_freq = set_mod_rate
     
     def set_mod_dev(self, mod_dev:float):
+        cmd = None
         if self.mod_type.upper() == 'FREQUENCY':
             cmd = 'FDEV'
             self.write(f'{cmd} {str(mod_dev)}')       #Set frequency deviation
@@ -358,7 +366,7 @@ class SignalGenerator():
             cmd = 'ADEP'
             self.write(f'{cmd} {str(mod_dev)}')       #Set amplitude depth
         # elif
-        
+        assert cmd
         self.mod_dev = float(self.query(f'{cmd}?'))
 
     def setup_sg_mod(self, sequence:str):
@@ -369,7 +377,7 @@ class SignalGenerator():
         elif sequence in ['T2seq','XY8seq','correlSpecSeq']:
             self.enable_iq_mod()
         else:
-            print('Error in self._instrcontrol.py: unrecognised sequence name passed to setupself._instrmodulation.')
+            printt('Error in self._instrcontrol.py: unrecognised sequence name passed to setupself._instrmodulation.')
             sys.exit()
         
     def setup_ext_pulse_mod(self):
@@ -413,22 +421,22 @@ class SignalGenerator():
         self.mod_status = self._instr.query('MODL?')
         
         if self.mod_status=='1\r\n':
-            print('self._instr modulation is on...')
+            printt('self._instr modulation is on...')
             self.mod_type = self._instr.query('TYPE?')
             
             if self.mod_type =='6\r\n':
-                print('...and is set to IQ')
+                printt('...and is set to IQ')
             elif self.mod_type == '4\r\n':
-                print('... and is set to Pulse modulation')
+                printt('... and is set to Pulse modulation')
                 self.mod_type = self._instr.query('PFNC?')
                 if self.mod_type == '5\r\n':
-                    print('... External')
+                    printt('... External')
                 else:
-                    print('... Square' if self.mod_type == '3\r\n' else '... Noise (PRBS)')
+                    printt('... Square' if self.mod_type == '3\r\n' else '... Noise (PRBS)')
             else:
-                print(f'Modulation is set to {self.mod_status}. Set either 4 (for IQ) or 6 (for Pulse)')
+                printt(f'Modulation is set to {self.mod_status}. Set either 4 (for IQ) or 6 (for Pulse)')
         else:
-            print('self._instr modulation is off.')
+            printt('self._instr modulation is off.')
 
 
 class SignalGenerator_sim():
@@ -451,13 +459,13 @@ class SignalGenerator_sim():
         self.mod_rate: float = 1e3
         self.mod_dev: float = 0.0
 
-        self.init(sg_addr)
+        self.init(SG_ADDR)
     
     def init(self, addr):
-        print("Enabled")
+        printt("Enabled")
         
     def uninit(self):
-        print("Closed")
+        printt("Closed")
 
     def _check_err(self):
         pass
@@ -468,16 +476,16 @@ class SignalGenerator_sim():
 
     def enable_ntype(self, enable:Union[bool, int]=True):
         if enable:
-            print("N-type enabled...")
+            print("N-type ON...")
         else:
-            print("N-type disabled...")
+            print("N-type OFF...")
         self.status_ntype = int(enable)
 
     def enable_bnc(self, enable:Union[bool, int]=True):
         if enable:
-            print("BNC enabled...")
+            print("BNC ON...")
         else:
-            print("BNC disabled...")
+            print("BNC OFF...")
         self.status_bnc = int(enable)
     
     def set_amp_rf(self, amp_rf:float, units='dBm'):

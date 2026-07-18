@@ -57,14 +57,15 @@ class DAQDeviceInfo:
     """Cached information about a DAQ device"""
     name: str
     product_type: str
-    ai_channels: List[str]
+    ai_channels: list[str]
     ai_voltage_ranges: List[Tuple[float, float]]
     ai_max_single_rate: float
     ai_max_multi_rate: float
     ai_min_rate: float
     ai_simultaneous_sampling: bool
-    terminal_configs: List[str]
-    pfi_terminals: List[str] = field(default_factory=list)  # Available PFI lines
+    terminal_configs: list[str]
+    pfi_terminals: list[str] = field(default_factory=list)  # Available PFI lines
+    counters: list[str] = field(default_factory=list)  # Available PFI counters
 
 def check_for_ai_devices(devices) -> list:  #DeviceCollection
     devs = []
@@ -74,7 +75,7 @@ def check_for_ai_devices(devices) -> list:  #DeviceCollection
     
     return devs
 
-def enumerate_devices() -> List[str]:
+def enumerate_devices() -> list[str]:
     """Get list of available DAQ devices"""
     if not HAS_NIDAQMX:
         return ["Simulated"]
@@ -115,15 +116,10 @@ def get_device_info(device_name: str) -> Optional[DAQDeviceInfo]:
                         for i in range(0, len(dev.ai_voltage_rngs), 2):
                             ranges.append((dev.ai_voltage_rngs[i], dev.ai_voltage_rngs[i+1]))
                     except:
+                        print("Warning: Could not get voltge range info!")
                         ranges = [(-10., 10.), (-5., 5.), (-1., 1.)]
                         
-                    # Get terminal configurations
-                    term_configs = []
-                    try:
-                        for tc in dev.ai_term_cfgs:
-                            term_configs.append(tc.name)
-                    except:
-                        term_configs = ["RSE", "NRSE", "DIFF"]
+                    term_configs = ["RSE", "NRSE", "DIFF"]
                     
                     # Get PFI terminals
                     pfi_terminals = []
@@ -137,9 +133,17 @@ def get_device_info(device_name: str) -> Optional[DAQDeviceInfo]:
                                 pfi_terminals.append(term_name)
                         pfi_terminals = sorted(pfi_terminals, key=lambda x: int(x[3:]) if x[3:].isdigit() else 0)
                     except:
+                        print("Warning: Could not get PFI terminals info!")
                         # Default PFI lines for most X-series devices
                         pfi_terminals = [f"PFI{i}" for i in range(16)]
-                        
+                    
+                    # Get counters
+                    try:
+                        counters = [ci.name for ci in dev.ci_physical_chans]
+                    except:
+                        counters = []
+                        print("Warning: Could not get counter info!")
+                    
                     return DAQDeviceInfo(
                         name=dev.name,
                         product_type=dev.product_type,
@@ -150,7 +154,8 @@ def get_device_info(device_name: str) -> Optional[DAQDeviceInfo]:
                         ai_min_rate=dev.ai_min_rate,
                         ai_simultaneous_sampling=dev.ai_simultaneous_sampling_supported,
                         terminal_configs=term_configs,
-                        pfi_terminals=pfi_terminals
+                        pfi_terminals=pfi_terminals,
+                        counters=counters,
                     )
     except Exception as e:
         logging.exception(f"Failed to get device info: {e}")
@@ -162,13 +167,23 @@ def get_device_info(device_name: str) -> Optional[DAQDeviceInfo]:
 # =============================================================================
 
 @dataclass
-class ChannelConfig:
+class AIChannelConfig:
     """Configuration for a single analog input channel"""
     physical_channel: str = "ai0"
     enabled: bool = True
     min_voltage: float = -10.0
     max_voltage: float = 10.0
     terminal_config: str = "RSE"
+    color: str = "#00BFFF"
+    name: str = "Channel 1"
+
+
+@dataclass
+class CIChannelConfig:
+    """Configuration for a single counter input channel"""
+    counter: str = "P6363/ctr0"
+    physical_channel: str = "PFI2"
+    enabled: bool = True
     color: str = "#00BFFF"
     name: str = "Channel 1"
 
@@ -207,7 +222,7 @@ class AcquisitionConfig:
     device: str = "Dev1"
     sample_rate: float = 100000.0
     display_length: int = 10000
-    channels: List[ChannelConfig] = field(default_factory=list)
+    channels: List[AIChannelConfig]|List[CIChannelConfig] = field(default_factory=list)
     buffer_size: int = 524288
     chunk_size: int = 4096
     
@@ -255,7 +270,7 @@ class ObservableConfig(QObject):
             self.deviceChanged.emit(value)
             
     @property
-    def channels(self) -> List[ChannelConfig]:
+    def channels(self) -> List[AIChannelConfig]|List[CIChannelConfig]:
         return self._config.channels
         
     @property
@@ -276,11 +291,11 @@ class ObservableConfig(QObject):
     def get_config(self) -> AcquisitionConfig:
         return self._config
         
-    def add_channel(self, config: ChannelConfig):
+    def add_channel(self, config: AIChannelConfig):
         self._config.channels.append(config)
         self.channelChanged.emit(len(self._config.channels) - 1, config)
         
-    def update_channel(self, index: int, config: ChannelConfig):
+    def update_channel(self, index: int, config: AIChannelConfig|CIChannelConfig):
         if 0 <= index < len(self._config.channels):
             self._config.channels[index] = config
             self.channelChanged.emit(index, config)

@@ -44,28 +44,22 @@ Example — sweep t_AOM as a config (shape-changing) parameter:
     )
 """
 
-import numpy as np
-import time
-import logging
-import yaml
-import json
-import h5py
+import numpy as np, time, logging, yaml, json, h5py
 from pathlib import Path
 from itertools import product
 from typing import Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 
-import connectionConfig as concfg
 from PBcontrol import PulseBlaster
 from DAQcontrol import AnalogInputTask, AnalogOutputTask, CounterInputTask
-from sequencecontrol import (plot_sequence as _plot_sequence,
-                             view_sequence as _view_sequence)
+from SGcontrol import SignalGenerator, SignalGenerator_sim
+import sequencecontrol as seqctrl
 from spinapi import ns, us, ms, Inst
 from sweep_utils import Sweep, SweepIndex, make_pb_setter
+from experiment_config import ExperimentConfig, DAQ_INFO
 
-if TYPE_CHECKING:
-    from experiment_config import ExperimentConfig
-
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Validation result container
@@ -137,54 +131,35 @@ def read_details(sequence: str, n_channels: int, Nsamples_cfg: int):
     return rpc, sum(rpc) * Nsamples_cfg
 
 
-def process_data(i_max, reads_per_cyc, data_row, Nsamples, sequence,
-                 n_channels):
-    ms_ = np.zeros((i_max, n_channels))
-    mr_ = np.zeros((i_max, n_channels))
-    co_ = np.zeros((i_max, n_channels))
-
-    sig_x = data_row[:i_max,
-                      list(range(0, Nsamples * reads_per_cyc[0],
-                                 reads_per_cyc[0]))].T
-    ms_[:, 0] = np.mean(sig_x, axis=0)
-
+def process_data(i_max, data_row, Nsamples, sequence):
+    # sig = data_row[:i_max, 0:int(Nsamples/2)]
+    sig = data_row[:i_max, 0::Nsamples]
+    mean_sig = sig.mean(axis=-1)
     has_ref = sequence.lower() not in ['t1ms0_train']
     if has_ref:
-        ref_x = data_row[:i_max,
-                          list(range(1, Nsamples * reads_per_cyc[0],
-                                     reads_per_cyc[0]))].T
-        mr_[:, 0] = np.mean(ref_x, axis=0)
-        co_[:, 0] = calc_contrast(ms_[:, 0], mr_[:, 0])
-
-    if n_channels > 1:
-        off = Nsamples * reads_per_cyc[1]
-        sig_y = data_row[:i_max,
-                          list(range(off, off * 2, reads_per_cyc[1]))].T
-        ref_y = data_row[:i_max,
-                          list(range(off + 1, off * 2,
-                                     reads_per_cyc[1]))].T
-        ms_[:, 1] = np.mean(sig_y, axis=0)
-        mr_[:, 1] = np.mean(ref_y, axis=0)
-        co_[:, 1] = calc_contrast(ms_[:, 1], mr_[:, 1])
-
-    return (ms_,) if not has_ref else (ms_, mr_, co_)
+        # ref = data_row[:i_max, int(Nsamples/2):]
+        ref = data_row[:i_max, 1::Nsamples]
+        mean_ref = ref.mean(axis=-1)
+        mean_contrast = calc_contrast(mean_sig, mean_ref)
+    
+    return (mean_sig,) if not has_ref else (mean_sig, mean_ref, mean_contrast)
 
 
 def savefile(filename: Path, data) -> bool:
-    def _c(o):
-        if isinstance(o, np.ndarray):  return o.tolist()
-        if isinstance(o, np.generic):  return o.item()
-        if isinstance(o, dict):        return {k: _c(v) for k, v in o.items()}
-        if isinstance(o, list):        return [_c(v) for v in o]
-        if isinstance(o, Path):        return str(o)
-        return o
+    def _convert(var):
+        if isinstance(var, np.ndarray):  return var.tolist()
+        if isinstance(var, np.generic):  return var.item()
+        if isinstance(var, dict):        return {k: _convert(v) for k, v in var.items()}
+        if isinstance(var, list):        return [_convert(v) for v in var]
+        if isinstance(var, Path):        return str(var)
+        return var
     try:
         s = filename.suffix.lower()
         if s == '.npy':
             np.save(filename, data, allow_pickle=False)
         elif s == '.yaml':
             with open(filename, 'w') as f:
-                yaml.dump(_c(data), f, indent=4, default_flow_style=False)
+                yaml.dump(_convert(data), f, indent=4, default_flow_style=False)
         elif s in ('.h5', '.hdf5'):
             with h5py.File(filename, 'a') as f:
                 g = f.require_group("data")
@@ -237,28 +212,31 @@ class DiodeExperiment:
         'mod_dev':   lambda self: self.sg.set_mod_dev,
     }
 
-    FREQ_ONLY_SEQUENCES = frozenset([
-        'esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr', 'drift_seq'])
+    FREQ_ONLY_SEQUENCES = frozenset(['esr_dig_mod_seq', 'esr_seq', 'pesr_seq', 'modesr',
+                                     'drift_seq'])
 
     # Parameters that change instrument settings (not PB timing)
-    INSTRUMENT_PARAMS = frozenset([
-        'freq', 'mw_freq', 'mw_power', 'mod_rate', 'mod_dev'])
+    INSTRUMENT_PARAMS = frozenset(['freq', 'mw_freq', 'mw_power', 'mod_rate', 'mod_dev'])
 
     def __init__(self, instruments: dict, config: 'ExperimentConfig'):
-        self.sg = instruments['sg']
+        self.sg: SignalGenerator = instruments['sg']
         self.pb: PulseBlaster = instruments['pb']
-        self.ao_task = instruments.get('ao_task')
+        self.ao_task: AnalogOutputTask|None = instruments.get('ao_task')
 
         self.cfg = config
         self.instr = 'diode'
 
         # State (populated by setup / execute)
-        self.sweep: Optional[Sweep] = None
-        self.ai_task: Optional[AnalogInputTask] = None
-        self.data_array: Optional[np.ndarray] = None
-        self.reads_per_cyc: list = []
+        self.sweep: Sweep|None = None
+        self.input_task: AnalogInputTask|CounterInputTask|None = None
+        self.data_array: np.ndarray|None = None
         self.daq_Nsamples: int = 0
-        self.n_channels: int = len(concfg.input_terminals)
+        if self.cfg.runtime.detector == 'counter':
+            # assert config.daq_ci is not None
+            self.n_channels = len(config.daq_ci.channel)
+        else:
+            # assert config.daq_ai is not None
+            self.n_channels = len(config.daq_ai.channels)
         self.scan_times: list[float] = []
         self.elapsed: float = 0.0
         self.i_outer: int = 0
@@ -266,10 +244,12 @@ class DiodeExperiment:
         self.i_scanpt: int = 0
 
         # Derived from config
+        # assert config.seq.name and config.seq.Nsamples and config.pb.channels and config.seq.Ncycles
         self.sequence: str = config.seq.name
         self.Nsamples_cfg: int = config.seq.Nsamples
+        self.Ncycles: int = config.seq.Ncycles
         self.Nruns: int = config.runtime.Nruns
-        self.pb_channels: dict = config.pb.channels
+        self.pb_channels: list = config.pb.channels
 
         # Execution mode flags
         self._reload_pb: bool = config.runtime.reload_pb
@@ -335,6 +315,7 @@ class DiodeExperiment:
 
         # Static MW power check
         if self.sequence not in ['aom_timing', 'T1ms0_train', 'drift_seq']:
+            # assert cfg.mw
             if cfg.mw.power >= 9.0:
                 hw_errors.append((
                     'mw.power', f"{cfg.mw.power} dBm",
@@ -344,6 +325,7 @@ class DiodeExperiment:
         inner_count = len(self.param_values)
         outer_count = self._calc_outer_count()
 
+        # assert cfg.seq.args_values
         # ── 3. Freq-only sequences: PB is fixed ─────────────────────
         if self._is_freq_sweep:
             valid_mask = np.ones((outer_count, inner_count), dtype=bool)
@@ -362,7 +344,7 @@ class DiodeExperiment:
             return self._store_result(valid_mask, [], hw_errors)
 
         # ── 4. PB timing sweep: full Cartesian product ───────────────
-        args_names = cfg.seq.args_names
+        args_names = cfg.seq.args_names; # assert args_names
         seq_args_base = list(cfg.seq.args_values)
         scan_names = cfg.scan_names
         inner_name = scan_names[0] if scan_names else ''
@@ -394,8 +376,8 @@ class DiodeExperiment:
         inner_pidx = (args_names.index(inner_name)
                       if inner_is_pb and inner_name in args_names
                       else -1 if inner_is_pb else None)
-
-        print(f"🔃 Validating {outer_count} × {inner_count} = "
+        # assert inner_pidx
+        printt(f"🔃 Validating {outer_count} × {inner_count} = "
               f"{outer_count * inner_count} cells...")
 
         for oc_flat, oc_indices in enumerate(outer_combos):
@@ -446,7 +428,7 @@ class DiodeExperiment:
                             import matplotlib.pyplot as plt
                             inst_list = the_list[i][0]
                             plt.figure()
-                            t_us, chP, yT = _plot_sequence(
+                            t_us, chP, yT = seqctrl.plot_sequence(
                                 inst_list, self.pb_channels)
                             for ch in chP:
                                 plt.plot(t_us, list(ch))
@@ -469,7 +451,7 @@ class DiodeExperiment:
             hw_errors=hw_errors, n_total=n_total, n_invalid=n_invalid)
         self._validation = result
         self._valid_mask = valid_mask
-        print(result.summary())
+        printt(result.summary())
         return result
 
     def _calc_outer_count(self) -> int:
@@ -484,14 +466,15 @@ class DiodeExperiment:
     # ══════════════════════════════════════════════════════════════════
     #  SETUP
     # ══════════════════════════════════════════════════════════════════
-
     def setup(self):
         cfg = self.cfg
 
+        # assert cfg.times
         # Per-sequence total time (used for DAQ timeout)
         self._t_total_s = (cfg.times.t_tot / 1e9 if cfg.times.t_tot > 0
                            else 2 * cfg.times.t_AOM / 1e9)
 
+        # assert cfg.seq.args_values
         self.seq_args = list(cfg.seq.args_values)
 
         # ── Validate if not already done ─────────────────────────────
@@ -502,15 +485,15 @@ class DiodeExperiment:
         if self._validation and self._validation.hw_errors:
             for name, val, reason in self._validation.hw_errors:
                 if 'MW power >= 9' in reason:
-                    print(f"❌ FATAL: {reason}. Aborting.")
+                    printt(f"❌ FATAL: {reason}. Aborting.")
                     raise ValueError(reason)
-                print(f"⚠ HW bound: {name}={val}: {reason}")
+                printt(f"⚠ HW bound: {name}={val}: {reason}")
 
         # DAQ sizing
-        self.reads_per_cyc, self.daq_Nsamples = read_details(
-            self.sequence, self.n_channels, self.Nsamples_cfg)
+        self.daq_Nsamples = self.Nsamples_cfg * self.Ncycles
 
         # ── Initial PB program ───────────────────────────────────────
+        # assert cfg.seq.args_names
         if self._is_freq_sweep:
             sal = list(self.seq_args)
         elif self.scan_name in cfg.seq.args_names:
@@ -527,12 +510,15 @@ class DiodeExperiment:
         self.sweep = Sweep()
         self._build_sweeps(cfg)
 
-        print(self.sweep.info())
+        printt(self.sweep.info())
 
         # SG
         if self.sequence not in ['aom_timing', 'T1ms0_train', 'drift_seq']:
+            # assert cfg.mw
             self.sg.set_freq(cfg.mw.freq)
             self.sg.set_amp_rf(cfg.mw.power)
+            self.sg.enable_ntype(1)
+            self.sg.setup_ext_pulse_mod()
 
         # AO test field
         tf = cfg.extra.get('test_field', [0, 0, 0])
@@ -542,42 +528,44 @@ class DiodeExperiment:
         # AI / CI task (per-point read size; batch mode re-creates in execute)
         if cfg.runtime.detector == 'counter':
             ci = cfg.daq_ci
-            self.ai_task = CounterInputTask(
-                dev=ci.ci_counter.split('/')[0],
-                counter=[int(ci.ci_counter.split('ctr')[-1])],
-                sampling_source=(concfg.samp_clk_terminal
-                                 if not ci.ci_sample_source
-                                 else ci.ci_sample_source),
-                sampling_rate=cfg.daq_ai.ai_sample_rate,
-                sampling_mode='finite',
-                samps_per_chan=int(self.daq_Nsamples),
-                start_trigger_source=concfg.start_trig_terminal,
+            # assert ci
+            # assert ci.start_trigger_source and ci.pause_trigger_source
+            self.input_task = CounterInputTask(
+                dev = 'P6363',
+                channel = ci.channel,
+                counter = ci.counter,
+                sample_source = ci.sample_source,
+                sample_rate = ci.sample_rate,
+                sample_mode = ci.sample_mode,
+                samps_per_chan = int(self.daq_Nsamples),
+                start_trigger_source = ci.start_trigger_source,
+                pause_trigger_source = ci.pause_trigger_source,
             )
             self.n_channels = 1  # counter is always single-channel
-            print(f"▶ Detector: COUNTER ({ci.ci_counter}, "
-                  f"input={ci.ci_input_terminal})")
+            printt(f"▶ Detector: COUNTER ({ci.counter}, input={ci.channel})")
         else:
-            self.ai_task = AnalogInputTask(
-                voltage_range=(-10, 10),
-                channels=concfg.input_terminals,
-                sampling_rate=cfg.daq_ai.ai_sample_rate,
-                sampling_source='',
-                start_trigger_source=concfg.start_trig_terminal,
+            ai = cfg.daq_ai
+            # assert ai
+            # assert ai.voltage_ranges and ai.sample_source and ai.start_trigger_source and ai.pause_trigger_source
+            self.input_task = AnalogInputTask(
+                channels=ai.channels,
+                voltage_ranges=ai.voltage_ranges,
+                sample_source=ai.sample_source,
+                sample_rate=ai.sample_rate,
+                sample_mode=ai.sample_mode,
                 samps_per_chan=int(self.daq_Nsamples),
+                start_trigger_source=ai.start_trigger_source,
+                pause_trigger_source=ai.pause_trigger_source,
             )
-            print(f"▶ Detector: ANALOG (ai{concfg.input_terminals})")
+            print(f"▶ Detector: ANALOG (ai{ai.channels})")
 
         # Data array
-        self.data_array = np.zeros((
-            self.sweep.outer_count,
-            self.Nruns,
-            self.sweep.inner_count,
-            self.daq_Nsamples * self.n_channels,
-        ))
+        self.data_array = np.zeros((self.sweep.outer_count, self.Nruns,
+                                    self.sweep.inner_count, self.daq_Nsamples * self.n_channels,
+                                    ))
 
         # Shuffle
-        shuffle = (self.primary_scan.shuffle
-                   if self.primary_scan else False)
+        shuffle = self.primary_scan.shuffle if self.primary_scan else False
         self._shuffle = shuffle
         if shuffle:
             self._inner_order = np.random.permutation(self.sweep.inner_count)
@@ -644,6 +632,7 @@ class DiodeExperiment:
             args_offset = 1   # everything in args_names shifts by 1
 
         # ── Inner axis ───────────────────────────────────────────────
+        # assert self.sweep
         if self._is_freq_sweep:
             self.sweep.add(self.scan_name, self.param_values,
                            setter=self.sg.set_freq)
@@ -654,8 +643,7 @@ class DiodeExperiment:
                 self.sweep.add(self.scan_name, self.param_values,
                                setter=self._resolve_setter(self.scan_name))
             else:
-                print("⚠ Fixed-PB with PB-timing inner param: "
-                      "PB programmed once with first value only.")
+                printt("⚠ Fixed-PB with PB-timing inner param: PB programmed once with first value only.")
                 self.sweep.add(self.scan_name, self.param_values,
                                setter=None)
         else:
@@ -691,15 +679,14 @@ class DiodeExperiment:
         factory = self.SETTER_REGISTRY.get(name)
         if factory is not None:
             return factory(self)
-        print(f"⚠ No setter for '{name}'")
+        printt(f"⚠ No setter for '{name}'")
         return None
 
     # ══════════════════════════════════════════════════════════════════
     #  VIEW SEQUENCES — plot PB timing at selected scan points
     # ══════════════════════════════════════════════════════════════════
 
-    def view_sequences(self, indices: Optional[list[int]] = None,
-                       dpi: int = 100):
+    def view_sequences(self, indices: list[int] = [], dpi: int = 100) -> list:
         """Plot PB pulse sequences at selected inner-param values.
 
         Builds the correct seqArgList from config (handling legacy
@@ -719,20 +706,20 @@ class DiodeExperiment:
         """
         cfg = self.cfg
 
-        if indices is None:
+        if indices is []:
             indices = getattr(cfg.runtime, 'seq_plot_indices', [0, -1])
 
         # Build the seqArgList in the same layout PB_program expects
         args_names = cfg.seq.args_names
+        # assert args_names and cfg.seq.args_values
         seq_args_base = list(cfg.seq.args_values)
 
         if self._is_freq_sweep:
             # PB program is fixed for freq sweeps — just plot once
             full_args = seq_args_base + [self.pb_channels]
-            _view_sequence(
-                self.instr, self.sequence, full_args,
+            return seqctrl.view_sequence(
+                instr=self.instr, sequence=self.sequence, seq_args=full_args,
                 param_values=None, indices=[0], dpi=dpi)
-            return
 
         # Determine inner param position
         if self.scan_name in args_names:
@@ -744,12 +731,65 @@ class DiodeExperiment:
             pidx = 0
             full_args = [self.param_values[0]] + seq_args_base + [self.pb_channels]
 
-        _view_sequence(
-            self.instr, self.sequence, full_args,
-            param_values=self.param_values,
-            indices=indices,
-            param_index=pidx,
-            dpi=dpi)
+        return seqctrl.view_sequence(
+            instr=self.instr, sequence=self.sequence, seq_args=full_args,
+            param_values=self.param_values, indices=indices, param_index=pidx, dpi=dpi)
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PLOT + VIEW SEQUENCES — play sequence at selected scan point
+    # ══════════════════════════════════════════════════════════════════
+
+    def play_sequence(self, indices: list[int] = []):
+        """Play PB pulse sequence at given inner-param value.
+
+        Builds the correct seqArgList from config (handling legacy
+        prepend vs in-args), then delegates to sequencecontrol.view_sequence.
+
+        Parameters
+        ----------
+        indices : list[int]
+            Which indices into the inner param_values array to plot.
+            Supports negative indexing ([-1] = last point).
+            Default: from config.runtime.seq_plot_indices, or [0, -1].
+
+        Can be called before or after setup().  Does NOT mutate any
+        experiment state — uses copies of all args.
+
+        """
+        printt("Playing sequence...")
+        cfg = self.cfg
+        if indices is []:
+            indices = getattr(cfg.runtime, 'seq_plot_indices', [0, -1])
+
+        # Build the seqArgList in the same layout PB_program expects
+        args_names = cfg.seq.args_names
+        # assert args_names and cfg.seq.args_values
+        seq_args_base = list(cfg.seq.args_values)
+        if self._is_freq_sweep:
+            # PB program is fixed for freq sweeps — just plot once
+            full_args = seq_args_base + [self.pb_channels]
+            the_lists = seqctrl.view_sequence(
+                instr=self.instr, sequence=self.sequence, seq_args=full_args,
+                param_values=self.param_values, indices=indices)
+        else:        
+            # Determine inner param position
+            if self.scan_name in args_names:
+                # In-args: param lives at its args_names index
+                pidx = args_names.index(self.scan_name)
+                full_args = seq_args_base + [self.pb_channels]
+            else:
+                # Legacy prepend: param goes at index 0
+                pidx = 0
+                full_args = [self.param_values[0]] + seq_args_base + [self.pb_channels]
+
+            the_lists = seqctrl.view_sequence(
+                instr=self.instr, sequence=self.sequence, seq_args=full_args,
+                param_values=self.param_values, indices=indices, param_index=pidx)
+        
+        self.pb.run_sequence_for_diode(
+                [the_lists[-1][i][0] for i in range(len(the_lists[-1]))])
+        
+        return (self.sequence, self.scan_name, self.param_values[indices[-1]])
 
     # ══════════════════════════════════════════════════════════════════
     #  EXECUTE — dispatch to appropriate mode
@@ -759,8 +799,8 @@ class DiodeExperiment:
         self,
         callback: Optional[Callable] = None,
         stop_check: Optional[Callable] = None,
-        save_path: Optional[Path] = None,
-        folder_number: Optional[str] = None,
+        save_path: Path|None = None,
+        folder_number: str|int|None = None,
     ) -> np.ndarray:
         """
         Acquisition loop: outer → Nruns → inner (optionally shuffled).
@@ -768,22 +808,19 @@ class DiodeExperiment:
         Dispatches to _execute_normal, _execute_fixed_pb, or _execute_batch
         based on RuntimeFlags.
 
-        callback(inner_idx, param_value, i_run, oc_idx, oc_vals,
-                 processed, raw)
+        `ExperimentThread._callback(inner_idx, param_value, i_run, oc_idx, oc_vals, processed, raw)` 
         """
         if self._load_all_params:
-            return self._execute_batch(
-                callback, stop_check, save_path, folder_number)
+            return self._execute_batch(callback, stop_check, save_path, folder_number)
         elif not self._reload_pb:
-            return self._execute_fixed_pb(
-                callback, stop_check, save_path, folder_number)
+            return self._execute_fixed_pb(callback, stop_check, save_path, folder_number)
         else:
-            return self._execute_normal(
-                callback, stop_check, save_path, folder_number)
+            return self._execute_normal(callback, stop_check, save_path, folder_number)
 
     # ── Normal mode ────────────────────────────────────────────────────
 
-    def _execute_normal(self, callback, stop_check, save_path, folder_number):
+    def _execute_normal(self, callback: Callable|None, stop_check: Callable|None,
+                        save_path: Path|None, folder_number: str|int|None):
         """Per-point PB reprogram (via inner setter) + DAQ read.
         Real-time plot per point."""
         return self._execute_per_point(
@@ -791,16 +828,16 @@ class DiodeExperiment:
 
     # ── Fixed-PB mode ──────────────────────────────────────────────────
 
-    def _execute_fixed_pb(self, callback, stop_check, save_path,
-                          folder_number):
+    def _execute_fixed_pb(self, callback: Callable|None, stop_check: Callable|None,
+                          save_path: Path|None, folder_number: str|int|None):
         """PB programmed once per outer combo (outer setter handles it).
         Only instrument setter (e.g. set_freq) per inner point.
         DAQ read per point.  Real-time plot per point."""
         return self._execute_per_point(
             callback, stop_check, save_path, folder_number)
 
-    def _execute_per_point(self, callback, stop_check, save_path,
-                           folder_number):
+    def _execute_per_point(self, callback: Callable|None, stop_check: Callable|None,
+                           save_path: Path|None, folder_number: str|int|None):
         """Shared implementation for Normal and Fixed-PB modes.
 
         Both iterate inner points one-by-one with per-point DAQ reads.
@@ -813,10 +850,12 @@ class DiodeExperiment:
         crash with bad timing values).  Instead, we iterate inner_values
         directly and call the setter ourselves only for valid cells.
         """
+        # assert self.data_array and self.sweep
         self.scan_times = []
         t_start = time.perf_counter()
         t_total_s = self._t_total_s
-        timeout = t_total_s * self.Nsamples_cfg + 5
+        # timeout = t_total_s * self.Nsamples_cfg + 5
+        timeout = 60
         stopped = False
 
         inner_vals = self.sweep.inner_values
@@ -829,13 +868,13 @@ class DiodeExperiment:
                 if oc_vals:
                     lbl = "  ".join(f"{k}={v:.6g}"
                                     for k, v in oc_vals.items())
-                    print(f"▶ Outer [{oc_idx+1}/"
+                    printt(f"▶ Outer [{oc_idx+1}/"
                           f"{self.sweep.outer_count}]: {lbl}")
 
                 for self.i_run in range(self.Nruns):
                     if stop_check and stop_check():
                         stopped = True; break
-                    print(f"  Run {self.i_run+1}/{self.Nruns}")
+                    printt(f"  Run {self.i_run+1}/{self.Nruns}")
 
                     for order_pos in range(self.sweep.inner_count):
                         if stop_check and stop_check():
@@ -845,16 +884,13 @@ class DiodeExperiment:
                         actual_val = inner_vals[actual_i]
 
                         # Skip invalid cells → NaN (BEFORE setter fires)
-                        if (self._valid_mask is not None
-                                and not self._valid_mask[oc_idx, actual_i]):
-                            self.data_array[
-                                oc_idx, self.i_run, actual_i, :] = np.nan
+                        if (self._valid_mask is not None and not self._valid_mask[oc_idx, actual_i]):
+                            self.data_array[oc_idx, self.i_run, actual_i, :] = np.nan
                             continue
 
-                        # # Shuffled: manually call inner setter
-                        # if (self._shuffle
-                        #         and self.sweep._inner[2] is not None):
-                        #     self.sweep._inner[2](actual_val)
+                        # Shuffled: manually call inner setter
+                        if self._shuffle and self.sweep._inner[2] is not None:
+                            self.sweep._inner[2](actual_val)
 
                         # Call inner setter only for valid cells
                         if inner_setter is not None:
@@ -863,39 +899,36 @@ class DiodeExperiment:
                         self.i_scanpt = actual_i
 
                         # if order_pos % max(1, self.sweep.inner_count // 10) == 0:
-                        print(f"    \x1b[38;2;250;250;0m{order_pos+1}/"
-                                f"{self.sweep.inner_count}: "
-                                f"{actual_val:.6g}\x1b[0m")
+                        print(f"    \x1b[38;2;250;250;0m{order_pos+1}/ {self.sweep.inner_count}: "
+                              f"{actual_val:.6g}\x1b[0m")
 
                         t0 = time.perf_counter()
-                        self.ai_task._task.stop()
-                        self.ai_task._task.start()
-                        self.ai_task._task_state = "running"
+                        # assert self.input_task is not None
+                        self.input_task._task.stop()
+                        self.input_task._task.start()
+                        self.input_task._task_state = "running"
 
-                        cts = self.ai_task.read_daq(
-                            self.daq_Nsamples, timeout=timeout)
-                        self.data_array[
-                            oc_idx, self.i_run, actual_i, :
-                        ] = np.ravel(np.array(cts))
-                        self.scan_times.append(
-                            time.perf_counter() - t0)
+                        cts = self.input_task.read_daq(self.daq_Nsamples, timeout=timeout)
+                        self.data_array[oc_idx, self.i_run, actual_i, :] = np.ravel(np.array(cts))
+                        self.scan_times.append(time.perf_counter() - t0)
 
+                        # Callback: to process and plot per point
                         if callback is not None:
-                            self._fire_callback(
-                                callback, actual_i, actual_val,
-                                self.i_run, oc_idx, oc_vals)
+                            self._fire_callback(callback, actual_i, actual_val,
+                                                self.i_run, oc_idx, oc_vals)
 
                     self._autosave_run(save_path, folder_number)
 
         except KeyboardInterrupt:
-            print("🛑 Interrupted")
+            printt("🛑 Interrupted")
 
         self._finish(t_start, save_path, folder_number)
         return self.data_array
 
     # ── Batch mode ─────────────────────────────────────────────────────
 
-    def _execute_batch(self, callback, stop_check, save_path, folder_number):
+    def _execute_batch(self, callback: Callable|None, stop_check: Callable|None,
+                       save_path: Path|None, folder_number:str|int|None):
         """All inner scan points compiled into a single PB program.
         Single DAQ read captures the entire inner sweep.
         Real-time plot updates once per run (after the read).
@@ -913,6 +946,7 @@ class DiodeExperiment:
         args_names = cfg.seq.args_names
 
         # Inner param's position in seq_args
+        # assert args_names and self.sweep
         if self.scan_name in args_names:
             inner_pidx = args_names.index(self.scan_name)
         else:
@@ -925,31 +959,41 @@ class DiodeExperiment:
         batch_timeout = 60 * 10
 
         # Re-create AI/CI task for the larger batch read
-        self.ai_task._task.stop()
-        self.ai_task._task.close()
+        # assert self.input_task is not None
+        self.input_task._task.stop()
+        self.input_task._task.close()
         if cfg.runtime.detector == 'counter':
             ci = cfg.daq_ci
-            self.ai_task = CounterInputTask(
-                dev=ci.ci_counter.split('/')[0],
-                counter=[int(ci.ci_counter.split('ctr')[-1])],
-                sampling_source=(concfg.samp_clk_terminal
-                                 if not ci.ci_sample_source
-                                 else ci.ci_sample_source),
-                sampling_rate=cfg.daq_ai.ai_sample_rate,
-                sampling_mode='finite',
-                samps_per_chan=int(batch_Nsamples),
-                start_trigger_source=concfg.start_trig_terminal,
-            )
+            # assert ci
+            # assert ci.start_trigger_source and ci.pause_trigger_source
+            self.input_task = CounterInputTask(dev='P6363',
+                                               channel=ci.channel,
+                                               counter=ci.counter,
+                                               sample_source=ci.sample_source,
+                                               sample_rate=ci.sample_rate,
+                                               sample_mode=ci.sample_mode,
+                                               samps_per_chan=int(batch_Nsamples),
+                                               start_trigger_source=ci.start_trigger_source,
+                                               pause_trigger_source=ci.pause_trigger_source,
+                                               )
+            self.n_channels = 1  # counter is always single-channel
+            printt(f"▶ Detector: COUNTER ({ci.counter}, input={ci.channel})")
         else:
-            self.ai_task = AnalogInputTask(
-                voltage_range=(-10, 10),
-                channels=concfg.input_terminals,
-                sampling_rate=cfg.daq_ai.ai_sample_rate,
-                sampling_source='',
-                start_trigger_source=concfg.start_trig_terminal,
-                samps_per_chan=int(batch_Nsamples),
-            )
+            ai = cfg.daq_ai
+            # assert ai
+            # assert ai.voltage_ranges and ai.sample_source and ai.pause_trigger_source and ai.start_trigger_source
+            self.input_task = AnalogInputTask(channels=ai.channels,
+                                              voltage_ranges=ai.voltage_ranges,
+                                              sample_source=ai.sample_source,
+                                              sample_rate=ai.sample_rate,
+                                              sample_mode=ai.sample_mode,
+                                              samps_per_chan=int(batch_Nsamples),
+                                              start_trigger_source=ai.start_trigger_source,
+                                              pause_trigger_source=ai.pause_trigger_source,
+                                              )
+            printt(f"▶ Detector: ANALOG (ai{ai.channels})")
 
+        # assert self.data_array
         try:
             for oc_idx, oc_vals in self.sweep.outer_combos():
                 if stopped: break
@@ -957,8 +1001,7 @@ class DiodeExperiment:
                 if oc_vals:
                     lbl = "  ".join(f"{k}={v:.6g}"
                                     for k, v in oc_vals.items())
-                    print(f"▶ Outer [{oc_idx+1}/"
-                          f"{self.sweep.outer_count}]: {lbl}")
+                    printt(f"▶ Outer [{oc_idx+1}/{self.sweep.outer_count}]: {lbl}")
 
                 # Build batch PB program with all inner values
                 batch_args = list(self.seq_args)
@@ -979,15 +1022,14 @@ class DiodeExperiment:
                 for self.i_run in range(self.Nruns):
                     if stop_check and stop_check():
                         stopped = True; break
-                    print(f"  Run {self.i_run+1}/{self.Nruns} (batch)")
+                    printt(f"  Run {self.i_run+1}/{self.Nruns} (batch)")
 
                     t0 = time.perf_counter()
-                    self.ai_task._task.stop()
-                    self.ai_task._task.start()
-                    self.ai_task._task_state = "running"
+                    self.input_task._task.stop()
+                    self.input_task._task.start()
+                    self.input_task._task_state = "running"
 
-                    cts = self.ai_task.read_daq(
-                        batch_Nsamples, timeout=batch_timeout)
+                    cts = self.input_task.read_daq(batch_Nsamples, timeout=batch_timeout)
 
                     dt = time.perf_counter() - t0
                     self.scan_times.append(dt)
@@ -997,97 +1039,117 @@ class DiodeExperiment:
                     n_got = min(len(raw_flat) // per_pt, n_inner)
 
                     if n_got == n_inner:
-                        self.data_array[oc_idx, self.i_run] = \
-                            raw_flat[:n_inner * per_pt].reshape(
-                                n_inner, per_pt)
+                        self.data_array[oc_idx, self.i_run] = raw_flat[:n_inner * per_pt].reshape(n_inner, per_pt)
                     elif n_got > 0:
-                        print(f"  ⚠ Batch read: got {n_got}/{n_inner} pts")
+                        printt(f"  ⚠ Batch read: got {n_got}/{n_inner} pts")
                         self.data_array[
-                            oc_idx, self.i_run, :n_got] = \
-                            raw_flat[:n_got * per_pt].reshape(n_got, per_pt)
+                            oc_idx, self.i_run, :n_got] = raw_flat[:n_got * per_pt].reshape(n_got, per_pt)
 
                     # NaN-fill invalid cells
                     if self._valid_mask is not None:
                         bad = ~self._valid_mask[oc_idx]
-                        self.data_array[
-                            oc_idx, self.i_run, bad, :] = np.nan
+                        self.data_array[oc_idx, self.i_run, bad, :] = np.nan
 
-                    # Callback: once per run
+                    # Callback: once per run - to process and plot
                     if callback is not None:
-                        self._fire_batch_callback(
-                            callback, oc_idx, oc_vals, raw_flat, per_pt)
+                        self._fire_batch_callback(callback, oc_idx, oc_vals, raw_flat, per_pt)
 
-                    print(f"    Batch: {dt:.2f}s "
-                          f"({dt/max(n_got,1)*1e3:.1f} ms/pt effective)")
+                    printt(f"    Batch: {dt:.2f}s ({dt/max(n_got,1)*1e3:.1f} ms/pt effective)")
 
                     self._autosave_run(save_path, folder_number)
 
         except KeyboardInterrupt:
-            print("🛑 Interrupted")
+            printt("🛑 Interrupted")
 
         self._finish(t_start, save_path, folder_number)
         return self.data_array
 
     # ── shared helpers ─────────────────────────────────────────────────
 
-    def _fire_callback(self, callback, actual_i, actual_val,
-                       i_run, oc_idx, oc_vals):
-        """Process current data slice and fire per-point callback."""
+    def _fire_callback(self, callback: Callable, actual_i, actual_val, i_run, oc_idx, oc_vals):
+        """Process current data slice and fire per-point callback to plot data and update status bar.
+        
+        Parameters
+        ----------
+        callback : Callable
+            callback after each parameter: `ExperimentThread._callback()`
+        actual_i : int
+            Inner loop / parameter index
+        actual_val : float
+            Inner loop / parameter value
+        i_run : int
+            Run index
+        oc_idx : int
+            Outer sweep indices
+        oc_vals : float
+            Outer sweep values
+        """
+        # assert self.data_array
         filled = self.data_array[oc_idx, i_run, :, :]
         valid_rows = ~np.isnan(filled).any(axis=1) & filled.any(axis=1)
         n_filled = int(np.count_nonzero(valid_rows))
-        proc = process_data(
-            n_filled, self.reads_per_cyc,
-            filled[valid_rows],
-            self.Nsamples_cfg, self.sequence,
-            self.n_channels
-        ) if n_filled > 0 else None
+        proc = process_data(n_filled,
+                            filled[valid_rows],
+                            self.Nsamples_cfg, self.sequence,
+                            ) if n_filled > 0 else None
         raw_row = self.data_array[oc_idx, i_run, actual_i, :]
-        callback(actual_i, actual_val, i_run, oc_idx, oc_vals,
-                 proc, raw_row)
+        callback(actual_i, actual_val, i_run, oc_idx, oc_vals, proc, raw_row)
 
-    def _fire_batch_callback(self, callback, oc_idx, oc_vals,
-                             raw_flat, per_pt):
-        """Process full-run data and fire callback once for batch mode."""
+    def _fire_batch_callback(self, callback: Callable, oc_idx, oc_vals, raw_flat, per_pt):
+        """Process full-run data and fire callback once for batch mode to plot data and update status bar.
+
+        Parameters
+        ----------
+        callback : Callable
+            callback after each run: `ExperimentThread._callback()`
+        oc_idx : int
+            Outer sweep indices
+        oc_vals : float
+            Outer sweep values
+        raw_flat : Array-like
+            Flattened raw data
+        per_pt : int
+
+        """
+        # assert self.data_array and self.sweep
         filled = self.data_array[oc_idx, self.i_run]
         valid_rows = ~np.isnan(filled).any(axis=1) & filled.any(axis=1)
         n_filled = int(np.count_nonzero(valid_rows))
-        proc = process_data(
-            n_filled, self.reads_per_cyc,
-            filled[valid_rows],
-            self.Nsamples_cfg, self.sequence,
-            self.n_channels
-        ) if n_filled > 0 else None
+        proc = process_data(n_filled,
+                            filled[valid_rows],
+                            self.Nsamples_cfg, self.sequence,
+                            ) if n_filled > 0 else None
+        
         n_inner = self.sweep.inner_count
-        callback(n_inner - 1,
-                 self.sweep.inner_values[-1],
-                 self.i_run, oc_idx, oc_vals,
-                 proc,
+        callback(n_inner - 1, self.sweep.inner_values[-1], self.i_run, oc_idx, oc_vals, proc,
                  raw_flat[-per_pt:] if len(raw_flat) >= per_pt else None)
 
-    def _autosave_run(self, save_path, folder_number):
+    def _autosave_run(self, save_path: Path|None, folder_number: str|int|None):
         if save_path and folder_number:
             df = save_path / f"data_{folder_number}.npy"
             savefile(df, self.data_array)
-            print(f"    💾 Run {self.i_run+1} → {df.name}")
+            printt(f"    💾 Run {self.i_run+1} → {df.name}")
 
-    def _finish(self, t_start, save_path, folder_number):
+    def _finish(self, t_start: float, save_path: Path|None, folder_number:str|int|None):
         self.elapsed = time.perf_counter() - t_start
         if self.scan_times:
-            print(f"✔ {self.elapsed:.1f}s  "
+            printt(f"✔ {self.elapsed:.1f}s  "
                   f"({np.mean(self.scan_times)*1e3:.1f} ± "
                   f"{np.std(self.scan_times)*1e3:.1f} ms/pt)")
         if self._valid_mask is not None:
             n_nan = int(np.sum(~self._valid_mask))
             if n_nan > 0:
-                print(f"  ℹ {n_nan} cells NaN-filled (invalid PB timing)")
+                printt(f"  ℹ {n_nan} cells NaN-filled (invalid PB timing)")
         if save_path and folder_number:
             self._save_params(save_path, folder_number)
 
-    def _save_params(self, save_path: Path, folder_number: str):
+    def _save_params(self, save_path: Path, folder_number: int|str):
+        # TODO: Confirm: update params from DAQ class and experiment threads
         """Save config + sweep metadata + validation + mode info."""
-        d = self.cfg.to_dict()
-        d['_sweep_info'] = {
+        # assert self.data_array and self.sweep
+        cfg_dict = self.cfg.to_dict()
+        cfg_dict['experiment_type'] = 'sweep'
+        cfg_dict['_sweep_info'] = {
             'inner': self.sweep.inner_name,
             'inner_count': self.sweep.inner_count,
             'outer_names': self.sweep.outer_names,
@@ -1095,14 +1157,14 @@ class DiodeExperiment:
             'data_shape': list(self.data_array.shape),
             'shuffled': self._shuffle,
         }
-        d['_timing'] = {
+        cfg_dict['_timing'] = {
             'elapsed_s': self.elapsed,
             'mean_per_pt_ms': (float(np.mean(self.scan_times) * 1e3)
                                if self.scan_times else 0),
             'std_per_pt_ms': (float(np.std(self.scan_times) * 1e3)
                               if self.scan_times else 0),
         }
-        d['_execution_mode'] = {
+        cfg_dict['_execution_mode'] = {
             'reload_pb': self._reload_pb,
             'load_all_params': self._load_all_params,
             'mode': ('batch' if self._load_all_params
@@ -1110,14 +1172,13 @@ class DiodeExperiment:
                      else 'normal'),
         }
         if self._validation is not None:
-            d['_validation'] = {
+            cfg_dict['_validation'] = {
                 'n_total': self._validation.n_total,
                 'n_invalid': self._validation.n_invalid,
-                'hw_errors': [(n, v, r)
-                              for n, v, r in self._validation.hw_errors],
+                'hw_errors': [(n, v, r) for n, v, r in self._validation.hw_errors],
             }
         pf = save_path / f"params_{folder_number}.yaml"
-        savefile(pf, d)
+        savefile(pf, cfg_dict)
 
         vf = save_path / f"scan_values_{folder_number}.npz"
         arrays = {name: axis.values
@@ -1125,18 +1186,18 @@ class DiodeExperiment:
         if self._valid_mask is not None:
             arrays['_valid_mask'] = self._valid_mask.astype(np.uint8)
         np.savez_compressed(vf, **arrays)
-        print(f"  💾 Params → {pf.name}, values → {vf.name}")
+        printt(f"  💾 Params → {pf.name}, values → {vf.name}")
 
     # ── teardown ────────────────────────────────────────────────────────
 
     def teardown(self):
-        if self.ai_task is not None:
+        if self.input_task is not None:
             try:
-                self.ai_task.stop()
-                self.ai_task._task.close()
+                self.input_task.stop()
+                self.input_task._task.close()
             except Exception:
                 pass
-            self.ai_task = None
+            self.input_task = None
 
     # ── config_sweep ────────────────────────────────────────────────────
 
@@ -1145,18 +1206,19 @@ class DiodeExperiment:
                      **execute_kwargs) -> list[np.ndarray]:
         """
         Outer loop over a CONFIGURATION parameter that requires
-        AI task rebuild (e.g. t_AOM, daq_Nsamples, sampling_rate).
+        AI task rebuild (e.g. t_AOM, daq_Nsamples, sample_rate).
         """
         results = []
         for i, val in enumerate(config_values):
-            print(f"\n{'='*60}")
-            print(f"Config sweep [{i+1}/{len(config_values)}]: "
+            printt(f"\n{'='*60}")
+            printt(f"Config sweep [{i+1}/{len(config_values)}]: "
                   f"{config_name} = {val}")
-            print(f"{'='*60}")
+            printt(f"{'='*60}")
 
             config_applier(val)
 
             self.teardown()
+            # assert self.cfg.seq.Nsamples and self.cfg.seq.args_values
             self.Nsamples_cfg = self.cfg.seq.Nsamples
             self.seq_args = list(self.cfg.seq.args_values)
             self.param_values = self.cfg.primary_scan.values

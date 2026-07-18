@@ -2,19 +2,22 @@
 #%%
 from ctypes import * # type: ignore
 from spinapi import *
-import sequencecontrol
-import numpy as np, connectionConfig as concfg, sys, time
+import sequencecontrol, numpy as np, sys, time
+from experiment_config import PB_CLK
+
+def printt(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 class PulseBlaster:
     
     def __init__(self, parameter_dict) -> None:
         self.parameter_dict = parameter_dict
         # the time unit is in ns.. as followed by the Pulse Blaster
-        self.pbclk = concfg.PBclk
-        # self.clk_cyc = (1 / self.pbclk) * 1e3  # in ns
-        self.clk_cyc = self.parameter_dict['pb']['clk_cyc']
+        self.pbclk = PB_CLK
+        self.clk_cyc = 1e3/PB_CLK
         self.pb_status = "closed"
         # self.configure()
+        self.pb_version: str = ''
 
         # the state of the PulseBlaster is as follows, state can be enquired after initialization
         # error         - if error occurs, replace the sys.exit() with this
@@ -24,9 +27,6 @@ class PulseBlaster:
         # programmed    - after pb_start_programming() pb_stop_programming()
         # running       - after pb_start()
         # stopped       - after pb_stop()
-    
-    # def set_sequencecontrol(self, seqctrl_obj):
-    #     self._seqctrl = seqctrl_obj
     
     def return_params(self):
         return self.parameter_dict
@@ -47,14 +47,13 @@ class PulseBlaster:
         None.
 
         """
+        # TODO: resolve init error after init failure
         if status < 0:
-            print(f'❌\x1b[1;37;41m Error: {pb_get_error()}\x1b[0m')
+            printt(f'❌\x1b[1;37;41m Error: {pb_get_error()}\x1b[0m')
             # pb_init();
             pb_stop()
             pb_close()
-            # sys.exit()
             self.pb_status = "error"
-            sys.exit()
         else:
             return 0
 
@@ -80,10 +79,10 @@ class PulseBlaster:
         if self.pb_status == "closed":
             status = pb_init(); self.errorCatcher(status)
             self.pb_status = "init"
-            # print("PB Init'd..")
-            print(f'✔ PB: \x1b[38;2;250;250;0mv {pb_get_version()} \x1b[0m')
+            self.pb_version = pb_get_version()
+            printt(f'✔ PB: \x1b[38;2;250;250;0mv {self.pb_version} \x1b[0m')
         else:
-            print("⚠Already init'd")
+            printt("⚠Already init'd")
             status = 0
         
         pb_core_clock(self.pbclk)
@@ -120,7 +119,6 @@ class PulseBlaster:
             DESCRIPTION.
 
         """
-        # self.parameter_dict['pb']['pbinst'].append([flags, inst, inst_data, length])
         flags = c_uint(flags)
         inst = c_int(inst)
         inst_data = c_int(inst_data)
@@ -128,8 +126,6 @@ class PulseBlaster:
         return spinapi.pb_inst_pbonly(flags, inst, inst_data, length)
 
     def start_sequence(self):
-        # pb_init()
-        # if self.pb_status
         status = pb_start()
         self.errorCatcher(status)
         self.pb_status = "running"
@@ -138,8 +134,6 @@ class PulseBlaster:
         return self.pb_status
 
     def stop_sequence(self):
-        # pb_init()
-        # if self.pb_status
         status = pb_stop()
         self.errorCatcher(status)
         self.pb_status = "stopped"
@@ -182,19 +176,17 @@ class PulseBlaster:
         elif 'timeseries' in instr:
             return PulseBlaster.PB_program_diode(sequence, sequenceArgs, err_check) # dummy return statement, required for program flow (??)
         else:
-            print("❌\x1b[1;37;41m Error: Invalid instr type for PB_program().\x1b[0m")
-            sys.exit()
+            printt("❌\x1b[1;37;41m Error: Invalid instr type for PB_program().\x1b[0m")
+            # sys.exit()
     
     # a way to assign the 
     @staticmethod
     def PB_program_camera(sequence, sequenceArgs, err_check=False):
         List = []
         seqctrl_name, allPBchannels = sequencecontrol.make_sequence('cam', sequence, sequenceArgs)
-        # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
-        # print(allPBchannels)
         for i in range(0, len(allPBchannels)):
             # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
-            channelBitMasks = sequencecontrol.event_cataloguer(allPBchannels[i])
+            channelBitMasks = sequencecontrol.sequence_event_cataloguer(allPBchannels[i])
             List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -203,11 +195,9 @@ class PulseBlaster:
     def PB_program_camera_trigger_many(sequence, sequenceArgs, err_check=False):
         List = []
         seqctrl_name, allPBchannels = sequencecontrol.make_sequence('cam_levelm', sequence, sequenceArgs)
-        # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
-        # print(allPBchannels)
         for i in range(0, len(allPBchannels)):
             # 2: one for signal sequence, other for reference sequence.. duto 'allPBchannels' alada kore produce kora hochhe.. tai eta..
-            channelBitMasks = sequencecontrol.event_cataloguer(allPBchannels[i])
+            channelBitMasks = sequencecontrol.sequence_event_cataloguer(allPBchannels[i])
             List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -216,9 +206,8 @@ class PulseBlaster:
     def PB_program_camera_level_trigger_1(sequence, sequenceArgs, err_check=False):
         List = []
         seqctrl_name, allPBchannels = sequencecontrol.make_sequence('cam_level1', sequence, sequenceArgs)
-        # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
         # print(allPBchannels)
-        channelBitMasks = sequencecontrol.event_cataloguer(allPBchannels)
+        channelBitMasks = sequencecontrol.sequence_event_cataloguer(allPBchannels)
         List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -241,10 +230,10 @@ class PulseBlaster:
             DESCRIPTION.
         """
         List = []
-        seqctrl_name, allPBchannels = sequencecontrol.sequencecontrol.make_sequence('diode', sequence, sequenceArgs)
+        seqctrl_name, allPBchannels = sequencecontrol.make_sequence('diode', sequence, sequenceArgs)
         # (List) of (PBchannels) containing information on which PB channel to turn ON at what time and for what duration.
         # print(allPBchannels)
-        channelBitMasks = sequencecontrol.sequencecontrol.sequence_event_cataloguer(allPBchannels)
+        channelBitMasks = sequencecontrol.sequence_event_cataloguer(allPBchannels)
         List.append(PulseBlaster.create_PBinstruction(channelBitMasks, err_check))
         # print(List)
         return seqctrl_name, List
@@ -336,8 +325,8 @@ class PulseBlaster:
         pb_reset()
         status = pb_start_programming(PULSE_PROGRAM);
         self.errorCatcher(status)
-        print(f"instructionList in run_sequence_for_diode:", end='\n')
-        print(instructionList)
+        # printt(f"instructionList in run_sequence_for_diode:", end='\n')
+        # printt(instructionList)
 
         # there is only one element in 'instructionList'.. hence assigning this as instructionList instead of signal_instruction or reference_instruction..
         instructionList = instructionList[0]
@@ -370,7 +359,7 @@ class PulseBlaster:
     def run_sequence_for_camera(self, instructionList, t_exposure, t_seq_total, N_total):
         # with sync-readout trigger
         # t_seq_total should be a list: t_seq_total = [t_seq_tot_sig, t_seq_tot_ref]
-        # print(instructionList)
+        printt(instructionList)
         # instructionList               => len(instructionList)=2; contains PB instructions for 'signal' and 'reference' sequences
         # instructionList[i]            => i=0: signal, i=1: reference
         # instructionList[0][i]         => i=0: 1st instruction of the signal part, i=1: 2nd instruction...
@@ -423,9 +412,9 @@ class PulseBlaster:
 
         N = [N_trigger, N_remaining, N_total]
         i=0
-        print(N)
-        print(t_buffer)
-        print(t_exposure)
+        printt(N)
+        printt(t_buffer)
+        printt(t_exposure)
 
         #-----------------------------korlam.. 15/07/2023-----------------------------
 
@@ -1837,7 +1826,7 @@ class PulseBlaster:
         status = pb_start_programming(PULSE_PROGRAM);    self.errorCatcher(status)
 
         number_of_frames = int(np.ceil(np.ceil(t_field/t_exposure)/2))       # (number of frames)/2 during the field ON time
-        print(f"{number_of_frames*2} in field ON time")
+        printt(f"{number_of_frames*2} in field ON time")
 
         # print(b_channels ^ concfg.laser, Inst.LOOP, number_of_frames, trigger_width)
         start.append(pb_inst_pbonly(b_channels ^ concfg.laser, Inst.CONTINUE, 0, t_field));    self.errorCatcher(start[0])

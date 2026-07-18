@@ -23,21 +23,16 @@ Loop order (outer → Nruns → inner):
 Phase 1: cam_levelm mode, static B field, no AO patterns.
 """
 
-import numpy as np
-import time
-import threading
-import logging
+import numpy as np, time, threading, logging
 from pathlib import Path
 from typing import Optional, Callable, TYPE_CHECKING
 
 from PBcontrol import PulseBlaster
-from sequencecontrol import sequencecontrol
 from sweep_utils import Sweep, make_pb_setter
 from experiment_base import calc_contrast, savefile, HW_BOUNDS
 
-if TYPE_CHECKING:
-    from experiment_config import ExperimentConfig
-    from Camcontrol import CameraWorker
+from experiment_config import ExperimentConfig
+from Camcontrol import CameraWorker
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -184,6 +179,7 @@ class CameraExperiment:
 
         # Camera config
         cam_cfg = config.camera
+        # assert cam_cfg
         self.instr_mode: str = cam_cfg.instr_mode
         self.exposure: float = cam_cfg.exposure_s            # seconds
         self.roi: list = cam_cfg.roi
@@ -193,15 +189,17 @@ class CameraExperiment:
 
         # Field config
         field_cfg = config.field_cfg
+        # assert field_cfg
         self.align_field = field_cfg.align_field
         self.test_field = field_cfg.test_field
         self.t_align_dc_ms = field_cfg.t_align_dc_ms
 
         # Sequence
+        # assert config.seq.name and config.seq.Nsamples and config.pb.channels
         self.sequence: str = config.seq.name
         self.Nsamples_cfg: int = config.seq.Nsamples  # = frames_per_cycle
         self.Nruns: int = config.runtime.Nruns
-        self.pb_channels: dict = config.pb.channels
+        self.pb_channels: list = config.pb.channels
 
         # Primary scan
         scan_names = config.scan_names
@@ -258,6 +256,7 @@ class CameraExperiment:
         self.vsize = self.roi[3] if len(self.roi) >= 4 else 2048
 
         # 2. Build seq arg list for PB programming
+        # assert cfg.seq.args_names and cfg.seq.args_values
         args_names = cfg.seq.args_names
         self._seq_arg_list = list(cfg.seq.args_values)
 
@@ -283,6 +282,7 @@ class CameraExperiment:
 
         # 5. Set SG
         if self.sequence not in ['aom_timing', 'T1ms0_train', 'drift_seq']:
+            # assert cfg.mw
             self.sg.set_freq(cfg.mw.freq)
             self.sg.set_amp_rf(cfg.mw.power)
 
@@ -397,6 +397,7 @@ class CameraExperiment:
         """
         cfg = self.cfg
         field_cfg = cfg.field_cfg
+        # assert field_cfg
         align_field = np.array(field_cfg.align_field, dtype=float)
 
         if np.allclose(align_field, 0):
@@ -415,11 +416,11 @@ class CameraExperiment:
             pattern = np.zeros((3, n_samples))
             half = n_samples // 2
             # First half: Bz + MW
-            pattern[:, :half] = (align_field / self.ao_task.vi_calibration
+            pattern[:, :half] = (align_field / AnalogOutputTask.coil_calibration
                                  ).reshape(3, 1)
             # Second half: Bx + By
             # (simplified — the full rotating pattern is experiment-specific)
-            pattern[:, half:] = (align_field / self.ao_task.vi_calibration
+            pattern[:, half:] = (align_field / AnalogOutputTask.coil_calibration
                                  ).reshape(3, 1)
 
             return AnalogOutputTask.prepare_data_for_write(pattern)
@@ -431,6 +432,7 @@ class CameraExperiment:
         """Add inner + outer axes to self.sweep."""
         # Inner axis — for camera experiments, sweep only calls setter for freq;
         # PB reprogramming is done inside the PBThread, not via Sweep setter
+        # assert self.sweep
         if self._is_freq_sweep:
             self.sweep.add(self.scan_name, self.param_values,
                            setter=self.sg.set_freq)
@@ -478,6 +480,7 @@ class CameraExperiment:
 
         cw = self.camera_worker
         timeout_ms = int(self.exposure * 1e3 + 500)
+        # assert self.sweep and self.data_array
 
         try:
             for oc_idx, oc_vals in self.sweep.outer_combos():
@@ -655,6 +658,7 @@ class CameraExperiment:
     def _fire_callback(self, callback, actual_i, actual_val,
                        i_run, oc_idx, oc_vals):
         """Process current run's data and fire per-point callback."""
+        # assert self.data_array
         # Process accumulated data for current (oc, run)
         data_slice = self.data_array[oc_idx, i_run]  # (inner, Nframes, v, h)
         # Count valid (non-zero) inner points
@@ -744,7 +748,7 @@ class CameraExperiment:
         except ImportError:
             print("  ⚠ tifffile not installed — skipping TIFF save")
             return
-
+        # assert self.sweep and self.data_array
         for oc in range(self.sweep.outer_count):
             stack = self.data_array[oc, self.i_run]  # (inner, Nframes, v, h)
             stack_flat = stack.reshape(-1, *stack.shape[-2:])  # flatten inner×frames
@@ -769,6 +773,7 @@ class CameraExperiment:
     def _save_params(self, save_path: Path, folder_number: str):
         """Save config + sweep metadata."""
         d = self.cfg.to_dict()
+        # assert self.sweep and self.data_array        
         d['_sweep_info'] = {
             'inner': self.sweep.inner_name,
             'inner_count': self.sweep.inner_count,
@@ -857,6 +862,7 @@ class CameraTimeseriesExperiment:
 
         # Camera config
         cam_cfg = config.camera
+        # assert cam_cfg
         self.instr_mode = cam_cfg.instr_mode
         self.exposure = cam_cfg.exposure_s
         self.roi = cam_cfg.roi
@@ -864,6 +870,7 @@ class CameraTimeseriesExperiment:
 
         # Field config
         field_cfg = config.field_cfg
+        # assert field_cfg
         self.test_field = field_cfg.test_field
         self.t_align_dc_ms = field_cfg.t_align_dc_ms
 
@@ -914,6 +921,7 @@ class CameraTimeseriesExperiment:
 
         # ── SG ──
         if self.sequence not in ['aom_timing', 'T1ms0_train', 'drift_seq']:
+            # assert cfg.mw
             self.sg.set_freq(cfg.mw.freq)
             self.sg.set_amp_rf(cfg.mw.power)
 
@@ -1096,6 +1104,7 @@ class CameraTimeseriesExperiment:
         all_sig = np.concatenate(self.full_sig) if self.full_sig else np.array([])
         all_ref = np.concatenate(self.full_ref) if self.full_ref else np.array([])
 
+        # assert self.cfg.mw
         meta = {
             'sequence': self.sequence,
             'scan_name': self.scan_name,
@@ -1154,6 +1163,7 @@ class _CameraPollingThread(threading.Thread):
         timeout_ms = int(exp.exposure * 1e3 + 500)
         Nframes = exp.Nframes
 
+        # assert exp.contrast_ring and exp.sig_ring and exp.ref_ring
         try:
             while not exp._stop_requested:
                 # Check auto-stop

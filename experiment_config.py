@@ -27,25 +27,102 @@ Usage:
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field, fields
-from typing import Optional, Union, Any
-from enum import Enum
-import numpy as np
+from dataclasses import dataclass, field, fields, KW_ONLY
+from typing import Union, Any
+from enum import Enum, IntFlag
+import numpy as np, json
 from pathlib import Path
-import json
 
-# ── Unit imports (unchanged from your codebase) ────────────────────────
-try:
-    from spinapi import ns, us, ms
-    from SGcontrol import Hz, kHz, MHz, GHz
-    from connectionConfig import (PBclk, laser, samp_clk, start_trig,
-                                  MW, camera, lia1)
-except ImportError:
-    ns, us, ms = 1, 1e3, 1e6
-    Hz, kHz, MHz, GHz = 1, 1e3, 1e6, 1e9
-    PBclk = 500
-    laser = samp_clk = start_trig = MW = camera = lia1 = 0
+# ═══════════════════════════════════════════════════════════════════════
+# PB INFO
+# ═══════════════════════════════════════════════════════════════════════
+ns, us, ms = 1., 1e3, 1e6
+PB_CLK = 500
 
+class PBpins(IntFlag):
+    """ PulseBlaster pin configuration
+
+    Combine multiple flags easily using pipe | operator:
+    `trigger_mask = PBpins.PB_camera | PBpins.PB_samp_clk | PBpins.PB_start_trig`
+
+    Usage: 
+    `print(trigger_mask.value)`  # Output: 19 (1 + 2 + 16)
+
+    `print(repr(trigger_mask))`  # Output: <PBpins.PB_start_trig|PB_samp_clk|PAUSE_TRIG>
+
+    Check active pins:
+    `if PBpins.PB_start_trig in trigger_mask:`
+    """
+    # 1 << x = 2**x: x is the PB pin
+    
+    pause_trig      = 1 << 0
+    conv_clk        = 1 << 0        # Conv CLK -- PFI 9
+    samp_clk        = 1 << 1        # Samp CLK -- PFI 14
+
+    MW              = 1 << 2
+    laser           = 1 << 3
+    start_trig      = 1 << 4        # Start Trig -- PFI 5
+    camera          = 1 << 0
+    gate            = 1 << 5        # SPCM gate channel
+
+    Q               = 1 << 6
+    I               = 1 << 7
+
+    bx              = 1 << 5
+    by              = 1 << 6
+    bz              = 1 << 7
+
+    lia1            = 1 << 1
+    lia3            = 1 << 4
+
+PB_TIMES = {
+    't_AOM': 2 *ms,
+    'AOM_lag': 800 *ns,
+    'MW_lag': 80 *ns,
+    't_pi': 140 *ns,
+    # t_piby2: float = t_pi/2,
+    'ro_delay': 400 *ns,
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# DAQ INFO
+# ═══════════════════════════════════════════════════════════════════════
+DAQ_INFO = {
+    # device
+    'name': "P6363",
+    'max_sample_rate': 2e6,
+    # Triggers
+    'start_trig_terminal': "PFI5",
+    'conv_clk_terminal': "PFI9",
+    'pause_trig_terminal': "PFI9",
+    'samp_clk_terminal': 'PFI14',        # "PFI14", '' = internal
+    'trigger_type': 'digital',
+    'trigger_edge': 'rising',    
+    # AI
+    'ai_channels': [21],
+    'ai_sample_mode': 'finite',
+    # CI
+    'ci_counter': 'P6363/ctr0',
+    'ci_channel': '/P6363/PFI2',
+    'ci_sample_mode': 'continuous',
+}
+# def cal_samp_rate():
+#     if len(input_terminals)==1:
+#         daq_max_samp_rate = 2e6    # Max samp rate in samp/CH/sec
+#     elif len(input_terminals)>1:
+#         daq_max_samp_rate = 1e6/len(input_terminals)    # Max samp rate in samp/CH/sec
+#     return daq_max_samp_rate
+
+# daq_max_samp_rate = cal_samp_rate()
+# ═══════════════════════════════════════════════════════════════════════
+# SG INFO
+# ═══════════════════════════════════════════════════════════════════════
+Hz, kHz, MHz, GHz = 1., 1e3, 1e6, 1e9
+SG_ADDR = [
+    "ASRL4::INSTR",
+    "TCPIP0::10.56.10.24::inst0::INSTR",
+    "TCPIP0::169.254.59.63::inst0::INSTR",
+]
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. SCAN AXIS — one per swept parameter
@@ -105,16 +182,16 @@ class ScanAxis:
     name: str
     start: float = 0.0
     stop: float = 0.0
-    step: Optional[float] = None
-    Nscanpts: Optional[int] = None
+    step: float|None = None
+    Nscanpts: int|None = None
     mode: ScanMode = ScanMode.LINEAR
-    segments: Optional[list[NonlinearSegment]] = None
+    segments: list[NonlinearSegment]|None = None
     unit_scale: float = 1.0
-    explicit_values: Optional[list[float]] = None
+    explicit_values: list[float]|None = None
     shuffle: bool = False
 
     # ── internal cache ──
-    _values: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
+    _values: np.ndarray|None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         # Auto-detect mode from what was provided
@@ -138,6 +215,9 @@ class ScanAxis:
                     self.step = (self.stop - self.start) / (self.Nscanpts - 1)
                 else:
                     self.step = 0
+
+        # assert self.step is not None
+        # assert self.Nscanpts is not None
 
     @property
     def values(self) -> np.ndarray:
@@ -171,6 +251,7 @@ class ScanAxis:
                     self.step = 0
 
     def _generate(self) -> np.ndarray:
+        # assert self.Nscanpts
         if self.mode == ScanMode.EXPLICIT:
             vals = np.asarray(self.explicit_values, dtype=float)
         elif self.mode == ScanMode.SEGMENTS:
@@ -188,6 +269,7 @@ class ScanAxis:
     def _generate_segments(self) -> np.ndarray:
         """Piecewise-linear sweep from segment list."""
         pieces = []
+        # assert self.segments
         for i, seg in enumerate(self.segments):
             n = round((seg.stop - seg.start) / (seg.step / 1e3))
             endpoint = (i == len(self.segments) - 1)
@@ -237,13 +319,13 @@ class ScanAxis:
 @dataclass
 class TimeConfig:
     """Time variables to Pulse Blaster"""
-    t_AOM: float = 10 *ms
-    AOM_lag: float = 700 *ns
-    MW_lag: float = 160 *ns
-
-    t_pi: float = 150 *ns
+    _: KW_ONLY
+    t_AOM: float
+    AOM_lag: float = PB_TIMES['AOM_lag']
+    MW_lag: float = PB_TIMES['MW_lag']
+    t_pi: float = PB_TIMES['t_pi']
     # t_piby2: float = t_pi/2
-    ro_delay: float = 400 *ns
+    ro_delay: float = PB_TIMES['ro_delay']
     t_tot: float = 0.
 
 @dataclass
@@ -262,8 +344,9 @@ class MicrowaveConfig:
 @dataclass
 class PulseBlasterConfig:
     """PulseBlaster channel map + clock."""
-    clock_MHz: float = PBclk
-    channels: dict[str, int] = field(default_factory=dict)
+    _: KW_ONLY
+    clock_MHz: float = PB_CLK
+    channels: list|None
 
     @property
     def clk_cyc_ns(self) -> float:
@@ -272,46 +355,48 @@ class PulseBlasterConfig:
 @dataclass
 class SequenceConfig:
     """Pulse sequence identity + timing args."""
-    name: str = ''
-    args_names: list[str] = field(default_factory=list)
-    args_values: list[float] = field(default_factory=list)  # ns
-    Nsamples: int = 0
+    name: str|None
+    args_names: list[str]|None
+    args_values: list[float]|None  # ns
+    Nsamples: int|None
+    Ncycles: int|None
 
 @dataclass
 class DAQAIConfig:
     """NI-DAQ acquisition — extend fields when ready."""
-    ai_channels: list[str] = field(default_factory=list)
-    ai_voltage_ranges: list[tuple[float,float]] = field(default_factory=list)
+    _: KW_ONLY
+    channels: list[int] = field(default_factory=lambda: DAQ_INFO['ai_channels'])
+    voltage_ranges: list[tuple[float,float]]|None
 
-    ai_sample_source: str = ''          # '' means internal
-    ai_sample_rate: float = 10e3        # Sa/s
-    ai_sample_mode: str = 'finite'      # finite sampling mode
-    ai_samps_per_chan: int = 1
+    sample_source: str|None
+    sample_rate: float = DAQ_INFO['max_sample_rate']       # Sa/s
+    sample_mode: str = DAQ_INFO['ai_sample_mode']
+    samps_per_chan: int|None
     
-    ai_start_trigger_type: str = 'digital'
-    ai_start_trigger_source: str = ''
-    ai_start_trigger_edge: str = 'rising'
+    start_trigger_type: str = DAQ_INFO['trigger_type']
+    start_trigger_source: str|None
+    start_trigger_edge: str = DAQ_INFO['trigger_edge']
 
-    ai_pause_trigger_type: str = 'digital'
-    ai_pause_trigger_source: str = ''
-    ai_pause_trigger_edge: str = ''
+    pause_trigger_type: str = DAQ_INFO['trigger_type']
+    pause_trigger_source: str|None
+    pause_trigger_edge: str = DAQ_INFO['trigger_edge']
 
 
 @dataclass
 class DAQAOConfig:
     """NI-DAQ acquisition — extend fields when ready."""
+    _: KW_ONLY
+    channels: list[str]|None
+    voltage_ranges: list[tuple[float,float]] = field(default_factory=lambda: [(-10, 10)])
 
-    ao_channels: list[str] = field(default_factory=list)
-    ao_voltage_ranges: list[tuple[float,float]] = field(default_factory=list)
-
-    ao_sample_source: str = ''          # '' means internal
-    ao_sample_rate: float = 10e3        # Sa/s
-    ao_sample_mode: str = 'finite'      # finite sampling mode
-    ao_samps_per_chan: int = 1
+    sample_source: str = ''          # '' means internal
+    sample_rate: float|None               # Sa/s
+    sample_mode: str|None                 # finite sampling mode
+    samps_per_chan: int|None
     
-    ao_start_trigger_type: str = 'digital'
-    ao_start_trigger_source: str = ''
-    ao_start_trigger_edge: str = 'rising'
+    start_trigger_type: str = 'digital'
+    start_trigger_source: str = ''
+    start_trigger_edge: str = 'rising'
 
 
 @dataclass
@@ -323,34 +408,42 @@ class DAQCIConfig:
 
     Fields
     ------
-    ci_counter : str
+    counter : str
         Physical counter channel, e.g. 'P6363/ctr0'.
-    ci_input_terminal : str
+    channel : str
         PFI terminal where SPD pulses arrive, e.g. '/P6363/PFI2'.
-    ci_sample_source : str
+    sample_source : str
         External sample clock source (PB), e.g. 'PFI14'.  '' = internal.
-    ci_sample_rate : float
+    sample_rate : float
         Nominal rate passed to cfg_samp_clk_timing (Hz).
-    ci_sample_mode : str
+    sample_mode : str
         'finite' for sweep, 'continuous' for timeseries.
         (Typically set by the experiment class, not the user.)
-    ci_samps_per_chan : int
+    samps_per_chan : int
         Buffer / read size per acquisition.
-    ci_start_trigger_source : str
+    start_trigger_source : str
         Arm-start trigger from PB, e.g. 'PFI15'.  '' = no trigger.
-    ci_start_trigger_edge : str
+    start_trigger_edge : str
         Edge type for the arm-start trigger.
+    pause_trigger_source : str
+    pause_trigger_edge : str
     """
-    ci_counter: str = 'P6363/ctr0'
-    ci_input_terminal: str = '/P6363/PFI2'
+    _: KW_ONLY
+    counter: str = DAQ_INFO['ci_counter']
+    channel: str = DAQ_INFO['ci_channel']
 
-    ci_sample_source: str = ''          # '' = internal clock
-    ci_sample_rate: float = 10e3        # Sa/s
-    ci_sample_mode: str = 'finite'
-    ci_samps_per_chan: int = 1
+    sample_source: str = DAQ_INFO['samp_clk_terminal']
+    sample_rate: float = DAQ_INFO['max_sample_rate']
+    sample_mode: str = DAQ_INFO['ci_sample_mode']
+    samps_per_chan: int|None
 
-    ci_start_trigger_source: str = ''
-    ci_start_trigger_edge: str = 'rising'
+    start_trigger_type: str = DAQ_INFO['trigger_type']
+    start_trigger_source: str|None
+    start_trigger_edge: str = DAQ_INFO['trigger_edge']
+
+    pause_trigger_type: str = DAQ_INFO['trigger_type']
+    pause_trigger_source: str|None
+    pause_trigger_edge: str = DAQ_INFO['trigger_edge']
 
 
 @dataclass
@@ -362,15 +455,16 @@ class UHFLIConfig:
     Populate it manually here, or attach a raw profile dict from
     UHFLIConfigManager.get_config().
     """
+    _: KW_ONLY
     demod_index: int = 0
-    oscillator_freq: float = 0.0
-    timeconstant: float = 1e-3
-    filter_order: int = 4
-    input_range: float = 1.0
+    oscillator_freq: float
+    timeconstant: float
+    filter_order: int
+    input_range: float
     output_amplitude: float = 0.0
 
     # Attach a raw profile dict from UHFLIConfigManager for full fidelity
-    _raw_profile: Optional[dict] = field(default=None, repr=False)
+    _raw_profile: dict|None = field(default=None, repr=False)
 
 @dataclass
 class CameraConfig:
@@ -422,12 +516,10 @@ class FieldConfig:
 
 @dataclass
 class PlotConfig:
-    x_units: float = GHz
-    x_label: str = 'Frequency (GHz)'
-
-@dataclass
-class SaveConfig:
-    prefix: str = 'Experiment'
+    x_units: float
+    x_label: str
+    x_label_units: str
+    
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -484,26 +576,30 @@ class ExperimentConfig:
     3. Add it to to_dict() serialization.
     That's it — existing config files that don't set it just get defaults.
     """
+    PB_CLK: float = PB_CLK
+    # Essential blocks
     scans: dict[str, ScanAxis] = field(default_factory=dict)
-    mw: MicrowaveConfig = field(default_factory=MicrowaveConfig)
-    # laser: LaserConfig = field(default_factory=LaserConfig)
-    times: TimeConfig = field(default_factory=TimeConfig)
-    pb: PulseBlasterConfig = field(default_factory=PulseBlasterConfig)
-    seq: SequenceConfig = field(default_factory=SequenceConfig)
-    daq_ai: DAQAIConfig = field(default_factory=DAQAIConfig)
-    daq_ao: DAQAOConfig = field(default_factory=DAQAOConfig)
-    daq_ci: DAQCIConfig = field(default_factory=DAQCIConfig)
-    uhfli: UHFLIConfig = field(default_factory=UHFLIConfig)
-    camera: CameraConfig = field(default_factory=CameraConfig)
-    field_cfg: FieldConfig = field(default_factory=FieldConfig)
-    plot: PlotConfig = field(default_factory=PlotConfig)
-    save_opts: SaveConfig = field(default_factory=SaveConfig)
-    runtime: RuntimeFlags = field(default_factory=RuntimeFlags)
+    pb: PulseBlasterConfig = field(default_factory=PulseBlasterConfig)  # type: ignore
+    seq: SequenceConfig = field(default_factory=SequenceConfig)     # type: ignore
+    plot: PlotConfig = field(default_factory=PlotConfig)        # type: ignore
+    runtime: RuntimeFlags = field(default_factory=RuntimeFlags)     # type: ignore
     extra: dict = field(default_factory=dict)
+
+    # Optional blocks
+    _: KW_ONLY
+    mw: MicrowaveConfig|None = None
+    # laser: LaserConfig = field(default_factory=LaserConfig)
+    times: TimeConfig|None = None
+    daq_ai: DAQAIConfig|None = None
+    daq_ao: DAQAOConfig|None = None
+    daq_ci: DAQCIConfig|None = None
+    uhfli: UHFLIConfig|None = None
+    camera: CameraConfig|None = None
+    field_cfg: FieldConfig|None = None    
 
     # Which optional instrument blocks were explicitly provided.
     # Populated automatically by __init_subclass__ / __post_init__.
-    _active_instruments: set = field(default_factory=set, repr=False)
+    _active_subconfigs: set = field(default_factory=set, repr=False)
 
     # Optional instrument fields — only serialized/printed when active.
     _OPTIONAL_FIELDS = {'mw', 'times', 'daq_ai', 'daq_ao', 'daq_ci', 'uhfli',
@@ -518,7 +614,7 @@ class ExperimentConfig:
         
         Since dataclass __init__ always calls default_factory for unset 
         fields, we instead rely on a class-method constructor pattern:
-        the _active_instruments set is filled by __init__ automatically 
+        the _active_subconfigs set is filled by __init__ automatically 
         because we intercept via __init_subclass__ ... 
         
         Actually, the simplest reliable approach: compare each optional 
@@ -526,21 +622,27 @@ class ExperimentConfig:
         differs, the instrument is active. If the user intentionally set 
         values that happen to match defaults (e.g., power=-24 which 
         IS the default), we still mark it active by having the user 
-        explicitly include it in _active_instruments if desired.
+        explicitly include it in _active_subconfigs if desired.
         
         In practice: we auto-detect by value comparison, AND provide
         .use() for explicit opt-in when defaults happen to match.
         """
+        # for fname in self._OPTIONAL_FIELDS:
+        #     obj = getattr(self, fname)
+        #     default_cls = type(obj)
+        #     default_obj = default_cls()
+        #     for f in fields(obj):
+        #         if f.name.startswith('_'):
+        #             continue
+        #         if getattr(obj, f.name) != getattr(default_obj, f.name):
+        #             self._active_subconfigs.add(fname)
+        #             break
+        # Seamlessly tracks active instruments without unstable reflection instantiation
         for fname in self._OPTIONAL_FIELDS:
-            obj = getattr(self, fname)
-            default_cls = type(obj)
-            default_obj = default_cls()
-            for f in fields(obj):
-                if f.name.startswith('_'):
-                    continue
-                if getattr(obj, f.name) != getattr(default_obj, f.name):
-                    self._active_instruments.add(fname)
-                    break
+            if hasattr(self, fname):
+                obj = getattr(self, fname)
+                if obj is not None:
+                    self._active_subconfigs.add(fname)
 
     def use(self, *instrument_names: str) -> 'ExperimentConfig':
         """Explicitly mark instruments as active (even if they match defaults).
@@ -560,14 +662,14 @@ class ExperimentConfig:
             if name not in self._OPTIONAL_FIELDS:
                 raise ValueError(f"'{name}' is not an optional instrument. "
                                  f"Valid: {self._OPTIONAL_FIELDS}")
-            self._active_instruments.add(name)
+            self._active_subconfigs.add(name)
         return self
 
     def _is_active(self, field_name: str) -> bool:
         """Check if an instrument block should be serialized/printed."""
         if field_name not in self._OPTIONAL_FIELDS:
             return True  # core fields always active
-        return field_name in self._active_instruments
+        return field_name in self._active_subconfigs
 
     # ── Convenience properties ──
 
@@ -614,23 +716,24 @@ class ExperimentConfig:
                       for k, v in self.scans.items()},
         }
         d['times'] = _safe_asdict(self.times)
+
         if _include('mw'):
             d['mw'] = _safe_asdict(self.mw)
         # if _include('laser'):
         #     d['laser'] = _safe_asdict(self.laser)
-        # if _include('pb'):
+        
         d['pb'] = {
             'clock_MHz': self.pb.clock_MHz,
-            'clk_cyc_ns': self.pb.clk_cyc_ns,
-            'channels': self.pb.channels,
+            'channels': dict([(channel.name, channel.value) for channel in self.pb.channels]),
         }
 
         # seq, runtime, plot, save are always included (core experiment identity)
+        # TODO: may convert this to `_safe_asdict()` by using `args` as dict replacing `args_names` and `args_values`
         d['seq'] = {
             'name': self.seq.name,
-            'args_names': self.seq.args_names,
-            'args_values': [float(v) for v in self.seq.args_values],
+            'args': dict([(name, value) for name, value in zip(self.seq.args_names, self.seq.args_values)]),
             'Nsamples': self.seq.Nsamples,
+            'Ncycles': self.seq.Ncycles,
         }
 
         if _include('daq_ai'):
@@ -651,8 +754,7 @@ class ExperimentConfig:
         if _include('field_cfg'):
             d['field'] = _safe_asdict(self.field_cfg)
 
-        d['plot'] = {'x_units': self.plot.x_units, 'x_label': self.plot.x_label}
-        d['save'] = _safe_asdict(self.save_opts)
+        d['plot'] = _safe_asdict(self.plot)
         d['runtime'] = _safe_asdict(self.runtime)
 
         if self.extra:
@@ -795,10 +897,10 @@ class ExperimentConfig:
             if show_all:
                 return True
             return self._is_active(name)
-
+        
         w = 60
         print("=" * w)
-        print(f"  {self.seq.name.upper()}  |  {self.save_opts.prefix}")
+        print(f"  {self.seq.name.upper()}  ")
         print("=" * w)
 
         # Scans
@@ -822,6 +924,7 @@ class ExperimentConfig:
 
         # Instruments — only if configured (or show_all)
         if _show('mw'):
+            # assert self.mw is not None
             print(f"\n  MICROWAVE:  {self.mw.power} dBm  |  {self.mw.freq:.6g} Hz")
 
         # if _show('laser'):
@@ -833,30 +936,35 @@ class ExperimentConfig:
         print(f"\n  PULSEBLASTER:  {self.pb.clock_MHz} MHz  "
                 f"(clk_cyc={self.pb.clk_cyc_ns:.1f} ns)")
         if self.pb.channels:
-            ch_str = ', '.join(f"{k}={v}" for k, v in self.pb.channels.items())
+            ch_str = ', '.join(f"{k}={v}" for k, v in dict(self.pb.channels).items())
             print(f"    channels: {ch_str}")
 
         print(f"\n  SEQUENCE:  {self.seq.name}")
         if self.seq.args_names:
             args = ', '.join(f"{n}={v:.6g}"
-                             for n, v in zip(self.seq.args_names, self.seq.args_values))
+                             for n, v in
+                             zip(self.seq.args_names, self.seq.args_values))
             print(f"    args: {args}")
         print(f"    Nsamples={self.seq.Nsamples}")
 
         if _show('daq_ai'):
-            print(f"\n  DAQ:  Nsamples={self.daq_ai.ai_samps_per_chan}  "
-                  f"|  rate={self.daq_ai.ai_sample_rate:.0f} Sa/s")
+            # assert self.daq_ai is not None
+            print(f"\n  DAQ:  Nsamples={self.daq_ai.samps_per_chan}  "
+                  f"|  rate={self.daq_ai.sample_rate:.0f} Sa/s")
         
         if _show('daq_ao'):
-            print(f"\n  DAQ AO:  Nsamples={self.daq_ao.ao_samps_per_chan}  "
-                  f"|  rate={self.daq_ao.ao_sample_rate:.0f} Sa/s")
+            # assert self.daq_ao is not None
+            print(f"\n  DAQ AO:  Nsamples={self.daq_ao.samps_per_chan}  "
+                  f"|  rate={self.daq_ao.sample_rate:.0f} Sa/s")
 
         if _show('daq_ci'):
-            print(f"\n  DAQ CI:  counter={self.daq_ci.ci_counter}  "
-                  f"|  input={self.daq_ci.ci_input_terminal}  "
-                  f"|  rate={self.daq_ci.ci_sample_rate:.0f} Sa/s")
+            # assert self.daq_ci is not None
+            print(f"\n  DAQ CI:  counter={self.daq_ci.counter}  "
+                  f"|  input={self.daq_ci.channel}  "
+                  f"|  rate={self.daq_ci.sample_rate:.0f} Sa/s")
 
         if _show('uhfli'):
+            # assert self.uhfli is not None
             print(f"\n  UHFLI:  demod={self.uhfli.demod_index}  "
                   f"|  osc={self.uhfli.oscillator_freq:.6g} Hz  "
                   f"|  TC={self.uhfli.timeconstant:.2g} s  "
@@ -864,6 +972,7 @@ class ExperimentConfig:
 
         if _show('camera'):
             cam = self.camera
+            # assert cam is not None
             print(f"\n  CAMERA:  mode={cam.instr_mode}  "
                   f"|  exp={cam.exposure_s*1e3:.1f} ms  "
                   f"|  ROI={cam.roi}  "
@@ -871,6 +980,7 @@ class ExperimentConfig:
 
         if _show('field_cfg'):
             fc = self.field_cfg
+            # assert fc is not None
             print(f"\n  FIELD:  align={fc.align_field}  "
                   f"|  test={fc.test_field}  "
                   f"|  t_dc={fc.t_align_dc_ms} ms")
@@ -921,7 +1031,7 @@ def _flatten(d: dict, prefix: str = '') -> dict[str, Any]:
 def diff_config(
     config_a: Union[ExperimentConfig, dict],
     config_b: Union[ExperimentConfig, dict],
-    ignore_keys: Optional[set[str]] = None,
+    ignore_keys: set[str]|None = None,
 ) -> dict[str, tuple[Any, Any]]:
     """Compare two configs and return changed paths.
 
@@ -964,8 +1074,8 @@ def diff_config(
 
 def diff_configs_batch(
     configs: dict[str, Union[ExperimentConfig, dict]],
-    reference: Optional[str] = None,
-    ignore_keys: Optional[set[str]] = None,
+    reference: str|None = None,
+    ignore_keys: set[str]|None = None,
 ) -> dict[str, dict[str, tuple[Any, Any]]]:
     """Compare multiple configs against a reference.
 

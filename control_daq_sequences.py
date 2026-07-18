@@ -1,25 +1,34 @@
 # control_daq_sequences.py
 
-from connectionConfig import PBclk#, laser, samp_clk, start_trig, MW, bx, by, bz, camera
-from spinapi import ns, us, ms
-from collections import namedtuple; import sys; import numpy as np
+import sys, numpy as np
+from experiment_config import PB_CLK, PBpins
+from collections import namedtuple
+ns, us, ms = 1., 1e3, 1e6
 
 PBchannel = namedtuple('PBchannel', ['channel_number', 'start_times', 'pulse_durations'])
+
+def compile_sequence(pbchannels: list[PBpins], channel_timings: dict) -> list[PBchannel]:
+    """Compact sequence maker."""
+    allPBchannels = []
+    active_pbchannels = {m.name.lower(): m.value for m in pbchannels}       # type: ignore
+    # Build channels
+    for channel, (starts, durations) in channel_timings.items():
+        if channel in active_pbchannels:
+            allPBchannels.append(PBchannel(active_pbchannels[channel], starts, durations))
+    
+    return allPBchannels
+
 conv_clk_sep = 5*us
 pulse_width = 100*ns
 
-clk_cyc = 1e3/PBclk       # Time resolution in ns
+clk_cyc = 1e3/PB_CLK            # Time resolution in ns
 ONE_PERIOD = 0x200000           # 23/22/21/20 = 0010b = 2^21d = 200000x
 TWO_PERIOD = 0x400000           # 23/22/21/20 = 0100 = 2^22
 THREE_PERIOD = 0x600000         # 23/22/21/20 = 0110
 FOUR_PERIOD = 0x800000          # 23/22/21/20 = 1000
 FIVE_PERIOD = 0xA00000           # 23/22/21/20 = 1010
 
-# class DAQsequences:
-#     def __init__(self, pb_channels):
-#         self.pb_channels = pb_channels
-
-    # @classmethod
+# TODO: DEBUG: return channel_timings variable and save to param file..
 
 # TODO: Add lock-in measurement sequences.. The way of sampling should be changed.
 # def make_esr_seq(seq_dur, pb_channels):
@@ -55,40 +64,30 @@ FIVE_PERIOD = 0xA00000           # 23/22/21/20 = 1010
     
 #     # print(allPBchannels)
 #     return allPBchannels
-def make_esr_seq(seq_dur, pb_channels):
 
-    # seq_dur = 2*seq_dur
-    trig_width = clk_cyc*round(100*ns/clk_cyc)
-    # readout_width = clk_cyc*round(100*ns/clk_cyc)
-    readout_buffer = clk_cyc*round(100*ns/clk_cyc)
-    # pd_pulse refers to the readout pulse timings; in the case of multi-channel acquisition, it refers to the last channel readout pulse...
-    pd_pulse = [seq_dur/2-readout_buffer, seq_dur-readout_buffer] # seq_dur/2-readout_buffer
-    # pd_pulse.extend([(seq_dur/2-readout_buffer)/2, 1.5*(seq_dur/2-readout_buffer)])
-    # pd_pulse.extend([seq_dur/2-readout_buffer-1*us, seq_dur-readout_buffer-1*us])
-    allPBchannels = []
+def make_esr_seq(seq_dur, pb_channels: list):
+    offset_time = 10 *us
 
-    allPBchannels.append(PBchannel(pb_channels.get('laser',-1), [0], [seq_dur/2]))
-    allPBchannels.append(PBchannel(pb_channels.get('mw',-1), [0], [seq_dur])) # seq_dur/2
-    allPBchannels.append(PBchannel(pb_channels.get('start',-1), [0], [trig_width]))
-    
-    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [0.2*ms, 1.7*ms],
-                                 [seq_dur/2-0.2*ms]*2) #-conv_clk_sep-pulse_width
-    
-    # samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [1*ms, 3*ms], [1*ms, 1*ms])
-    # samp_clk_channel = PBchannel(samp_clk, [(pulse-conv_clk_sep-pulse_width) for pulse in pd_pulse], [trig_width for i in range(0,len(pd_pulse))]) #-conv_clk_sep-pulse_width
-    # conv_clk_channel = PBchannel(conv_clk, [pd_pulse[0]-conv_clk_sep, pd_pulse[0], pd_pulse[1]-conv_clk_sep, pd_pulse[1]], [trig_width for i in range(0,4)])
-    # samp_clk_channel = PBchannel(samp_clk, [0, seq_dur/2], [seq_dur/2, seq_dur/2])
-    allPBchannels.append(samp_clk_channel)
+    channel_timings = {
+        'start_trig':   ([0],
+                         [pulse_width]),
+        'laser':        ([0],
+                         [seq_dur + pulse_width]),
+        'mw':           ([0],
+                         [seq_dur/2]),
+        
+        'pause_trig':   ([offset_time, seq_dur/2 + offset_time],
+                         [seq_dur/2-offset_time]*2),
+        # 'pause_trig':   ([seq_dur/2*0.5, seq_dur/2*1.5], [seq_dur/2*0.5]*2)
+        # 'samp_clk':         ([0.2*ms, 1.7*ms], [seq_dur/2-0.2*ms]*2),
+        # 'samp_clk':         ([seq_dur/2-pulse_width, seq_dur-pulse_width], [pulse_width]*2)
+        # 'lia':              ([0], [seq_dur]),
+        # 'bx':               ([0], [seq_dur]),
+        # 'by':               ([0], [seq_dur]),
+        # 'bz':               ([0], [seq_dur]),
+    }
 
-    allPBchannels.append(PBchannel(pb_channels.get('lia',-1), [0], [seq_dur]))
-    
-    allPBchannels.append(PBchannel(pb_channels.get('bx',-1), [0], [seq_dur]))
-    allPBchannels.append(PBchannel(pb_channels.get('by',-1), [0], [seq_dur]))
-    allPBchannels.append(PBchannel(pb_channels.get('bz',-1), [0], [seq_dur]))
-    # allPBchannels.extend([conv_clk_channel])
-    
-    # print(allPBchannels)
-    return allPBchannels
+    return compile_sequence(pbchannels=pb_channels, channel_timings=channel_timings)
 
 # def make_esr_seq(seq_dur, pb_channels):
 
@@ -604,37 +603,27 @@ def make_rabi_seq(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag, pb_channels):
     else:
         t_drive = t_MW + 0*ns
 
-    apd_pulse = [t_drive+AOM_lag+t_ro_delay, 2*t_drive+t_AOM+AOM_lag+t_ro_delay]
-    seq_dur = (2*t_drive + 2*t_AOM) if (2*t_drive + 2*t_AOM) > (2*t_drive+t_AOM+AOM_lag+t_ro_delay+pulse_width) else (2*t_drive+t_AOM+AOM_lag+t_ro_delay+pulse_width)
+    # apd_pulse = [t_drive+AOM_lag+t_ro_delay, 2*t_drive+t_AOM+AOM_lag+t_ro_delay]
+    apd_pulse = [t_drive+AOM_lag, 2*t_drive+t_AOM+AOM_lag]
+    # seq_dur = (2*t_drive + 2*t_AOM) if (2*t_drive + 2*t_AOM) > (2*t_drive+t_AOM+AOM_lag+t_ro_delay+pulse_width) else (2*t_drive+t_AOM+AOM_lag+t_ro_delay+pulse_width)
     
-    # laser_channel = PBchannel(laser, [t_drive],[])
-    laser_channel = PBchannel(pb_channels.get('laser',-1), [t_drive, 2*t_drive+t_AOM], [t_AOM,t_AOM])
-    start_trig_channel = PBchannel(pb_channels.get('start',-1), [0], [pulse_width])
-    # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
-    allPBchannels = []
-    if t_MW <= 5*clk_cyc and t_MW > 0:
-        # (PBchannel) for MW pulse
-        MWchannel = PBchannel(pb_channels.get('mw',-1), [0*us+AOM_lag-MW_lag], [5*clk_cyc])
-        # SHORT PULSE duration
-        shortpulseFLAG = int((t_MW/2)*ONE_PERIOD)
-        shortPulseChannel = PBchannel(shortpulseFLAG, [0*us+AOM_lag-MW_lag], [5*clk_cyc])     # (PBchannel) for SHORT MW pulse
-        allPBchannels = [shortPulseChannel, MWchannel]  # Short pulse feature
-    else:
-        # MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag], [t_MW])
-        MWchannel = PBchannel(pb_channels.get('mw',-1), [0*us+AOM_lag-MW_lag], [t_MW])
-        allPBchannels = [MWchannel]
-    
-    # conv_clk_channel = PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
-    # conv_clk_channel = PBchannel(conv_clk, [0], [])
-    samp_clk_channel = PBchannel(pb_channels.get('samp',-1), [apd_pulse[0], apd_pulse[1]], [pulse_width for i in range(0,len(apd_pulse))])
-    # bx_channel = PBchannel(bx, [0], [seq_dur])
-    # by_channel = PBchannel(by, [0], [seq_dur])
-    # bz_channel = PBchannel(bz, [0], [seq_dur])
-    
-    allPBchannels.extend([laser_channel, samp_clk_channel, start_trig_channel])
-    # allPBchannels.extend([conv_clk_channel])
-    # print(allPBchannels)
-    return allPBchannels
+    channel_timings = {
+        'start_trig':       ([0],
+                             [pulse_width]),
+        'laser':            ([t_drive, 2*t_drive+t_AOM],
+                             [t_AOM,t_AOM]),
+        'mw':               ([0*us+AOM_lag-MW_lag],
+                             [t_MW]),
+        'pause_trig':       ([apd_pulse[0], apd_pulse[1]],
+                             [t_ro_delay]*2),
+        # 'samp_clk':       ([apd_pulse[0], apd_pulse[1]], [pulse_width]*2),
+        # 'samp_clk':         ([0.2*ms, 1.7*ms], [seq_dur/2-0.2*ms]*2),
+        # 'lia':              ([0], [seq_dur]),
+        # 'bx':               ([0], [seq_dur]),
+        # 'by':               ([0], [seq_dur]),
+        # 'bz':               ([0], [seq_dur]),
+    }
+    return compile_sequence(pbchannels=pb_channels, channel_timings=channel_timings)
 
 def make_rabi_contrast_sequence(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag):
     """
@@ -737,7 +726,7 @@ def make_dig_mod_rabi_sequence(t_MW, t_AOM, t_ro_delay, AOM_lag, MW_lag, N_laser
     allPBchannels = [laser_ch, MW_ch, start_trig_ch, samp_clk_ch]
     return allPBchannels
 
-def make_pulsed_esr_seq(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi):
+def make_pulsed_esr_seq(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi, pb_channels):
     """
     Make pulse sequence for Pulsed ODMR
 
@@ -759,40 +748,53 @@ def make_pulsed_esr_seq(t_AOM, t_ro_delay, AOM_lag, MW_lag, t_pi):
         A list of PBchannel object types.
 
     """
+
     t_flip = 2*us + t_pi
     apd_pulse = [t_flip+AOM_lag+t_ro_delay, 2*t_flip+t_AOM+AOM_lag+t_ro_delay]
-    laser_channel = PBchannel(laser, [t_flip, 2*t_flip+t_AOM], [t_AOM,t_AOM])
-    start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
-    # if the MW pulse duration is less than 5*clk_cyc, use the SHORT PULSE feature. Otherwise, use the original time duration.
-    # MWchannel = PBchannel(MW, [AOM_lag-MW_lag], [t_flip])
-    MWchannel = PBchannel(MW, [AOM_lag-MW_lag], [t_pi])
-    # conv_clk_channel = PBchannel(conv_clk,[apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
-    # samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-pulse_width, apd_pulse[1]-pulse_width], [pulse_width for i in range(0,2)])
     
-    # samp_clk_channel = PBchannel(samp_clk,[apd_pulse[0], apd_pulse[1]], [pulse_width for i in range(0,2)])
-    samp_clk_channel = PBchannel(samp_clk, [t_flip+AOM_lag, 2*t_flip+t_AOM+AOM_lag], [t_AOM, t_AOM])
-
-    allPBchannels = [MWchannel, laser_channel, samp_clk_channel, start_trig_channel]
-    # allPBchannels.extend([conv_clk_channel])
-    # print(allPBchannels)
-    return allPBchannels
+    channel_timings = {
+        'start_trig':       ([0],
+                             [pulse_width]),
+        'laser':            ([t_flip, 2*t_flip + t_AOM],
+                             [t_AOM, t_AOM]),
+        'mw':               ([AOM_lag - MW_lag],
+                             [t_pi]),
+        'pause_trig':       ([apd_pulse[0], apd_pulse[1]],
+                             [t_ro_delay]*2),
+        # 'samp_clk':       ( [t_flip+AOM_lag, 2*t_flip+t_AOM+AOM_lag], [t_AOM, t_AOM]),
+        # 'samp_clk':         ([0.2*ms, 1.7*ms], [seq_dur/2-0.2*ms]*2),
+        # 'lia':              ([0], [seq_dur]),
+        # 'bx':               ([0], [seq_dur]),
+        # 'by':               ([0], [seq_dur]),
+        # 'bz':               ([0], [seq_dur]),
+    }
+    return compile_sequence(pbchannels=pb_channels, channel_timings=channel_timings)
 
 #------------------------------------------------------------------------------
-def make_echo_seq_MW(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi):
+def make_echo_seq_MW(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi, pb_channels):
     """ Spin-echo seq. 
     Ref = FL w/o MW"""
+    
     t_delay = delay_1st_half + delay_2nd_half + 2*t_pi# + 5*us     # increase the actual laser off time to accomodate the non-zero width of the pi/2 and pi pulses so that the actual precession time is as defined by the param variable of mainControl
     apd_pulse = [t_delay+AOM_lag+ro_delay, 2*t_delay+t_AOM+AOM_lag+ro_delay]
-
-    laser_channel = PBchannel(laser, [t_delay, 2*t_delay+t_AOM], [t_AOM,t_AOM])
-    start_trig_channel = PBchannel(start_trig, [0], [pulse_width])
-    MWchannel = PBchannel(MW, [0*us+AOM_lag-MW_lag, 0*us+AOM_lag+t_pi/2+delay_1st_half-MW_lag, 0*us+AOM_lag+(t_delay-0*us)-MW_lag-t_pi/2], [t_pi/2, t_pi, t_pi/2])
-    # The third MW pulse 
-    samp_clk_channel = PBchannel(samp_clk, [apd_pulse[0]-pulse_width, apd_pulse[1]-pulse_width], [pulse_width, pulse_width])
-    # conv_clk_channel = PBchannel(conv_clk, [apd_pulse[0], apd_pulse[0]+conv_clk_sep, apd_pulse[1], apd_pulse[1]+conv_clk_sep], [pulse_width for i in range(0,4)])
     
-    allPBchannels = [MWchannel, laser_channel, samp_clk_channel, start_trig_channel]#, conv_clk_channel]
-    return allPBchannels
+    channel_timings = {
+        'start_trig':       ([0],
+                             [pulse_width]),
+        'laser':            ([t_delay, 2*t_delay+t_AOM],
+                             [t_AOM,t_AOM]),
+        'mw':               ([0*us+AOM_lag-MW_lag, 0*us+AOM_lag+t_pi/2+delay_1st_half-MW_lag, 0*us+AOM_lag+(t_delay-0*us)-MW_lag-t_pi/2],
+                             [t_pi/2, t_pi, t_pi/2]),
+        'pause_trig':       ([apd_pulse[0], apd_pulse[1]],
+                             [ro_delay]*2),
+        # 'samp_clk':       ( [t_flip+AOM_lag, 2*t_flip+t_AOM+AOM_lag], [t_AOM, t_AOM]),
+        # 'samp_clk':         ([0.2*ms, 1.7*ms], [seq_dur/2-0.2*ms]*2),
+        # 'lia':              ([0], [seq_dur]),
+        # 'bx':               ([0], [seq_dur]),
+        # 'by':               ([0], [seq_dur]),
+        # 'bz':               ([0], [seq_dur]),
+    }
+    return compile_sequence(pbchannels=pb_channels, channel_timings=channel_timings)
 
 #------------------------------------------------------------------------------
 def make_echo_seq_FL(delay_2nd_half, delay_1st_half, t_AOM, ro_delay, AOM_lag, MW_lag, t_pi, pb_channels):
